@@ -1,0 +1,15 @@
+# name: har-2way-model-dataset-builder
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - cpuonly
+  - opencv
+  - numpy
+  - tqdm
+  - pip
+  - pip:
+      - orjson
