@@ -18,7 +18,8 @@ from training.modules.utils.logger import Logger
 from training.modules.utils.lr_scheduler import lr_lambda
 from training.modules.utils.runtime import setup_runtime, load_yaml
 from training.modules.utils.skeleton import build_coco17_adj
-from training.modules.dataset.dataset import SyncedDataset # 修正する可能性あり
+from training.modules.utils.early_stopper import EarlyStopper
+from training.modules.dataset.dataset import SyncedDataset
 
 from config_base import *
 
@@ -62,6 +63,8 @@ def train(config):
     # logging
     _log_dir = config["logging"]["log_dir"]
     log_dir = ARTIFACT_ROOT / _log_dir / timestamp
+    best_model_name = config["logging"]["best_model_name"]
+    best_model_path = log_dir / best_model_name
     csv_name = config["logging"]["csv_name"]
     graph_dir = log_dir / config["logging"]["graph_dir"]
     graph_size = config["logging"]["graph_size"]
@@ -79,6 +82,8 @@ def train(config):
     epochs = config["training"]["epochs"]
     accum_steps = config["training"]["accum_steps"]
     max_norm = config["training"]["max_norm"]
+    patience = config["training"]["patience"]
+    min_delta = config["training"]["min_delta"]
     # optimizer
     lr = config["optimizer"]["lr"]
     weight_decay = config["optimizer"]["weight_decay"]
@@ -122,6 +127,7 @@ def train(config):
     )
 
     trainer = Trainer(model, head_keys, device, accum_steps=accum_steps, loss_weights=loss_weights)
+    early_stopper = EarlyStopper(patience=patience, min_delta=min_delta, path=best_model_path)
 
     # 学習
     print("Training...")
@@ -130,7 +136,7 @@ def train(config):
         val_losses, val_accs = trainer.run_one_epoch(val_loader, max_norm=max_norm, is_train=False)
 
         # ログの更新
-        row = [epoch]
+        row = [epoch + 1]
         row.extend(train_losses[k] for k in head_keys)
         row.append(train_losses["main"])
         row.extend(val_losses[k] for k in head_keys)
@@ -148,25 +154,30 @@ def train(config):
             f"skel:{train_losses['skel']:.3f}/{val_losses['skel']:.3f}"
         )
 
+        # 早期終了
+        early_stopper(val_losses["main"], model)
+        if early_stopper.should_stop:
+            break
+
         scheduler.step()
     
-    # グラフの描画
-    items = {
-        "main": ["loss"],
-        **{k: ["loss", "acc"] for k in head_keys}
-    }
+        # グラフの描画
+        items = {
+            "main": ["loss"],
+            **{k: ["loss", "acc"] for k in head_keys}
+        }
 
-    for k, names in items.items():
-        for name in names:
-            logger.create_graph(
-                x_axis_header="epoch",
-                y_axis_headers=[f"t_{name}_{k}", f"v_{name}_{k}"],
-                title=f"{name} ({k})",
-                figsize=graph_size,
-                filename=graph_dir / f"{name}_{k}.png"
-            )
+        for k, names in items.items():
+            for name in names:
+                logger.create_graph(
+                    x_axis_header="epoch",
+                    y_axis_headers=[f"t_{name}_{k}", f"v_{name}_{k}"],
+                    title=f"{name} ({k})",
+                    figsize=graph_size,
+                    filename=graph_dir / f"{name}_{k}.png"
+                )
 
-
+    early_stopper.save_model(model)
 
 
 if __name__ == "__main__":

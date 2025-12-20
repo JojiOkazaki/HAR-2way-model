@@ -16,11 +16,11 @@ class SkeletonBranch(nn.Module):
         self.transformer = transformer
     
     def forward(self, x, confs):
+        if torch.isnan(x).any():
+            raise RuntimeError("NaN detected in skeleton input")
+            
         # 入力形状の把握
         B, T, N, K, C = x.shape
-
-        # 信頼度スコアによるマスクの作成
-        conf_mask = confs.unsqueeze(-1)
 
         # 人物valid判定(1関節でもconf>0なら人物ありとする)
         person_valid = (confs.max(dim=-1).values > 0)
@@ -32,8 +32,9 @@ class SkeletonBranch(nn.Module):
         frame_mask = (person_valid.sum(dim=-1) == 0) # shape: (B, T), Trueの時無効フレーム
 
         # GCN
-        h_gcn = x * conf_mask # shape: (B, T, N, K, C)
-        h_gcn = h_gcn.reshape(B*T*N, K, C) # shape: (B*T*N, K, C)
+        confs_exp = confs.unsqueeze(-1) # (B, T, N, K, 1)
+        h_gcn = torch.cat([x, confs_exp], dim=-1) # (B, T, N, K, C+1)
+        h_gcn = h_gcn.reshape(B*T*N, K, C+1) # shape: (B*T*N, K, C+1)
         h_gcn = self.gcn(h_gcn) # shape: (B*T*N, d_gcn)
 
         h_gcn = h_gcn.reshape(B*T, N, -1) # shape: (B*T, N, d_gcn)

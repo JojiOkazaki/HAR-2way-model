@@ -1,5 +1,6 @@
 logging:
   log_dir: runs
+  best_model_name: best_model.pt
   csv_name: loss_history.csv
   graph_dir: graphs
   graph_size: [6, 4]
@@ -17,52 +18,54 @@ model:
       cnn:
         conv_channels: [3, 64, 128]
         fc_layers: [256, 128]
-        dropouts: [0.0, 0.0, 0.0, 0.1]
+        dropouts: [0.0, 0.0, 0.1, 0.2]
       mh_attn_pool:
         dim: 128
         num_heads: 4
-        dropout: 0.1
+        dropout: 0.3
       transformer:
         d_model: 128
         nhead: 8
         num_layers: 2
         dim_ff: 512
         max_len: 32
-        dropout: 0.2
+        dropout: 0.4
 
     skel:
       gcn:
-        channels: [2, 16, 32, 64, 128]
-        dropouts: [0.0, 0.0, 0.0, 0.1]
+        channels: [3, 16, 32, 64, 128]
+        dropouts: [0.0, 0.0, 0.1, 0.2]
       mh_attn_pool:
         dim: 128
-        num_heads: 4
-        dropout: 0.1
+        num_heads: 8
+        dropout: 0.3
       transformer:
         d_model: 128
         nhead: 8
-        num_layers: 2
+        num_layers: 4
         dim_ff: 512
         max_len: 32
-        dropout: 0.2
+        dropout: 0.4
 
     mlp:
       layers: [256, 128, 101]
       dropouts: [0.2, 0.2]
 
-  loss_weights: [1.0, 1.0, 1.0]
+  loss_weights: [1.0, 1.0, 3.0]
 
 training:
   batch_size: 4
-  epochs: 20
-  accum_steps: 2
+  epochs: 50
+  accum_steps: 4
   max_norm: 1.0
   seed: 42
+  patience: 5
+  min_delta: 0.0001
 
 optimizer:
-  lr: 0.0001
+  lr: 0.0005
   weight_decay: 0.0001
-  warmup_epochs: 1
+  warmup_epochs: 2
   min_lr_ratio: 0.1
 
 runtime:

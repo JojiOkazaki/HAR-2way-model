@@ -47,7 +47,7 @@ def generate_video_sample(video_path, json_data, T, N, K, W, H):
             # 骨格、信頼度スコアの取得
             skel = np.array([row[:2] for row in person["keypoints_coco"]]) # shape: (K, 2)
             score = np.array([row[2] for row in person["keypoints_coco"]]) # shape: (K, )
-            skel /= np.array([W, H], dtype=np.float32) # # 0~1に正規化
+            skel = normalize_skeleton_person_based(skel, score)
             skel_list.append(skel)
             score_list.append(score)
 
@@ -89,3 +89,39 @@ def preprocess_persons(persons, person_max, kp_len=17):
         })
 
     return persons_sorted
+
+# COCOデータセットによる人物基準正規化
+def normalize_skeleton_person_based(kps, scores):
+    LEFT_HIP = 11
+    RIGHT_HIP = 12
+    LEFT_SHOULDER = 5
+    RIGHT_SHOULDER = 6
+
+    kps = kps.astype(np.float32)
+    scores = scores.astype(np.float32)
+
+    # NaN / Inf が含まれていたら無効扱い
+    if not np.isfinite(kps).all():
+        return np.zeros_like(kps)
+
+    # hip が無効
+    if scores[LEFT_HIP] <= 0 or scores[RIGHT_HIP] <= 0:
+        return np.zeros_like(kps)
+
+    hip_center = 0.5 * (kps[LEFT_HIP] + kps[RIGHT_HIP])
+    kps = kps - hip_center
+
+    # shoulder が無効ならスケール1
+    if scores[LEFT_SHOULDER] > 0 and scores[RIGHT_SHOULDER] > 0:
+        scale = np.linalg.norm(
+            kps[LEFT_SHOULDER] - kps[RIGHT_SHOULDER]
+        )
+    else:
+        scale = 1.0
+
+    if not np.isfinite(scale) or scale < 1e-6:
+        return np.zeros_like(kps)
+
+    kps = kps / scale
+    return kps
+
