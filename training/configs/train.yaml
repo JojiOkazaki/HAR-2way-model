@@ -16,20 +16,20 @@ model:
   architecture:
     img:
       cnn:
-        conv_channels: [3, 64, 128]
-        fc_layers: [256, 128]
-        dropouts: [0.0, 0.0, 0.1, 0.2]
+        conv_channels: [3, 32, 64]
+        fc_layers: [128]
+        dropouts: [0.0, 0.0, 0.1]
       mh_attn_pool:
         dim: 128
         num_heads: 4
-        dropout: 0.3
+        dropout: 0.5
       transformer:
         d_model: 128
         nhead: 8
-        num_layers: 2
-        dim_ff: 512
+        num_layers: 1
+        dim_ff: 256
         max_len: 32
-        dropout: 0.4
+        dropout: 0.5
 
     skel:
       gcn:
@@ -55,7 +55,7 @@ model:
 
 training:
   batch_size: 4
-  epochs: 50
+  epochs: 70
   accum_steps: 4
   max_norm: 1.0
   seed: 42

@@ -177,7 +177,6 @@ def train(config):
                     filename=graph_dir / f"{name}_{k}.png"
                 )
 
-    early_stopper.save_model(model)
 
 
 if __name__ == "__main__":
