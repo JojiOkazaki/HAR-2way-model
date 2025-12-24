@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
 
-# ========================================================================
-# GCN層の定義
-# ========================================================================
+# レイヤの定義
 class GCNLayer(nn.Module):
     def __init__(self, in_dim, out_dim, adj):
         super().__init__()
@@ -21,9 +19,7 @@ class GCNLayer(nn.Module):
         h = self.A_hat @ x # shape: (B*T*N, K, C)
         return self.linear(h)
 
-# ========================================================================
 # ブロックの定義
-# ========================================================================
 class Block(nn.Module):
     def __init__(self):
         super().__init__()
@@ -32,9 +28,6 @@ class Block(nn.Module):
     def forward(self, x):
         return self.block(x)
 
-# ========================================================================
-# 全結合ブロック
-# ========================================================================
 class FCBlock(Block):
     def __init__(self, in_dim, out_dim, dropout=0.0):
         super().__init__()
@@ -45,9 +38,6 @@ class FCBlock(Block):
             nn.Dropout(dropout) if dropout > 0.0 else nn.Identity(),
         )
 
-# ========================================================================
-# 畳み込みブロック
-# ========================================================================
 class ConvBlock(Block):
     def __init__(self, in_dim, out_dim, kernel_size=3, padding=1, dropout=0.0, max_pool_2d=2):
         super().__init__()
@@ -59,9 +49,6 @@ class ConvBlock(Block):
             nn.MaxPool2d(max_pool_2d),
         )
 
-# ========================================================================
-# グラフ畳み込みブロック
-# ========================================================================
 class GraphBlock(Block):
     def __init__(self, in_dim, out_dim, adj, dropout=0.0):
         super().__init__()
@@ -72,30 +59,7 @@ class GraphBlock(Block):
             nn.Dropout(dropout) if dropout > 0.0 else nn.Identity(),
         )
 
-# ========================================================================
-# GlobalMeanPooling
-# ========================================================================
-class GlobalMeanPooling(nn.Module):
-    def forward(self, x):
-        return x.mean(dim=1) # (N, F) -> (F, )
-
-# ========================================================================
-# GlobalSumPooling
-# ========================================================================
-class GlobalSumPooling(nn.Module):
-    def forward(self, x):
-        return x.sum(dim=0)
-
-# ========================================================================
-# GlobalMaxPooling
-# ========================================================================
-class GlobalMaxPooling(nn.Module):
-    def forward(self, x):
-        return x.max(dim=0).values
-
-# ========================================================================
-# MultiheadAttentionPooling
-# ========================================================================
+# プーリングの定義
 class MultiheadAttentionPooling(nn.Module):
     def __init__(self, dim, num_heads=4, dropout=0.0):
         super().__init__()
@@ -125,3 +89,86 @@ class MultiheadAttentionPooling(nn.Module):
         pooled, _ = self.attention(q, z, z, key_padding_mask=key_padding_mask)
 
         return pooled.squeeze(1)
+
+class SpatialGraphConvBlock(nn.Module):
+    """
+    ST-GCN の Spatial Graph Convolution（簡易版）
+    入力:  x (N, C_in, T, V)
+    出力:  y (N, C_out, T, V)
+    """
+    def __init__(self, in_channels: int, out_channels: int, adj: torch.Tensor, bias: bool = True):
+        super().__init__()
+        A_hat = self._normalize_adj(adj)
+        self.register_buffer("A_hat", A_hat)  # (V, V)
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # (N, C, T, V) -> (N, C, T, V)
+        x = torch.einsum("nctv,vw->nctw", x, self.A_hat)
+        return self.conv(x)
+    
+    def _normalize_adj(adj: torch.Tensor) -> torch.Tensor:
+        """
+        adj: (V, V) 0/1 adjacency (no self-loop ok)
+        returns: A_hat (V, V) normalized with self-loop
+        """
+        A = adj + torch.eye(adj.size(0), device=adj.device, dtype=adj.dtype)
+        D = A.sum(dim=1)  # (V,)
+        D_inv_sqrt = torch.pow(D.clamp(min=1e-12), -0.5)
+        D_inv_sqrt = torch.diag(D_inv_sqrt)
+        return D_inv_sqrt @ A @ D_inv_sqrt
+
+class STGCNBlock(nn.Module):
+    """
+    Spatial GraphConv + Temporal Conv + Residual
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        adj: torch.Tensor,
+        temporal_kernel_size: int = 9,
+        stride: int = 1,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+
+        if temporal_kernel_size % 2 == 0:
+            raise ValueError("temporal_kernel_size must be odd (for same padding).")
+
+        pad_t = (temporal_kernel_size - 1) // 2
+
+        self.gcn = SpatialGraphConvBlock(in_channels, out_channels, adj)
+
+        self.tcn = nn.Sequential(
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=(temporal_kernel_size, 1),
+                stride=(stride, 1),
+                padding=(pad_t, 0),
+                bias=False,
+            ),
+            nn.BatchNorm2d(out_channels),
+            nn.Dropout(dropout) if dropout > 0.0 else nn.Identity(),
+        )
+
+        if (in_channels == out_channels) and (stride == 1):
+            self.residual = nn.Identity()
+        else:
+            self.residual = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=(stride, 1), bias=False),
+                nn.BatchNorm2d(out_channels),
+            )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (N, C, T, V)
+        res = self.residual(x)
+        x = self.gcn(x)
+        x = self.tcn(x)
+        x = x + res
+        return self.relu(x)

@@ -28,34 +28,28 @@ model:
         dropout: 0.5
 
     skel:
-      gcn:
-        channels: [3, 64, 128, 256, 256, 128]
-        dropouts: [0.0, 0.0, 0.0, 0.1, 0.1]
-      transformer:
-        d_model: 128
-        nhead: 8
-        num_layers: 4
-        dim_ff: 512
-        max_len: 32
-        dropout: 0.1
+      stgcn:
+        channels: [3, 64, 64, 64, 128, 128, 128, 256, 256, 128]
+        dropouts: [0.1, 0.2, 0.3, 0.4, 0.4, 0.4, 0.5, 0.5, 0.5]
+        temporal_kernel_size: 9
 
     mlp:
       layers: [256, 128, 101]
       dropouts: [0.3, 0.3]
 
-  loss_weights: [0.0, 0.0, 1.0]
+  loss_weights: [0.0, 1.0, 2.0]
 
 training:
-  batch_size: 12
+  batch_size: 8
   epochs: 70
-  accum_steps: 1
+  accum_steps: 3
   max_norm: 5.0
   seed: 42
   patience: 10
   min_delta: 0.001
 
 optimizer:
-  lr: 0.0005 # 1e-3になると学習できない
+  lr: 0.0005 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)
   weight_decay: 0.00001
   warmup_epochs: 1
   min_lr_ratio: 0.3

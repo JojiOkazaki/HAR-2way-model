@@ -9,7 +9,7 @@ class FullModel(nn.Module):
         self.mlp = mlp
 
         self.img_out_dim = self.image_branch.transformer.cls_token.size(-1)
-        self.skel_out_dim = self.skeleton_branch.transformer.cls_token.size(-1)
+        self.skel_out_dim = self.skeleton_branch.out_dim
         num_classes = self.mlp.model[-1].out_features
 
         self.image_head = nn.Linear(self.img_out_dim, num_classes)

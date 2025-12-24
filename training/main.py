@@ -5,8 +5,8 @@ from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from datetime import datetime
 
-from training.modules.models.cnn import CNN as cnn
-from training.modules.models.gcn import GCN as gcn
+from training.modules.models.cnn import CNN
+from training.modules.models.stgcn import STGCN
 from training.modules.models.mlp import MLP
 from training.modules.models.transformer_encoder import TransformerEncoder
 from training.modules.networks.image_branch import ImageBranch
@@ -27,17 +27,24 @@ try:
 except ImportError:
     pass
 
+'''
 def build_branch(params, branch_class, branch_key):
     BRANCH_MAP = {"cnn": cnn, "gcn": gcn}
     return branch_class(
         BRANCH_MAP[branch_key](**params[branch_key]),
         TransformerEncoder(**params["transformer"]),
     )
+'''
 
 def create_model(params):
     return FullModel(
-        build_branch(params["img"], ImageBranch, "cnn"),
-        build_branch(params["skel"], SkeletonBranch, "gcn"),
+        ImageBranch(
+            CNN(**params["img"]["cnn"]),
+            TransformerEncoder(**params["img"]["transformer"]),
+        ),
+        SkeletonBranch(
+            STGCN(**params["skel"]["stgcn"])
+        ),
         MLP(**params["mlp"]),
     )
 
@@ -126,7 +133,7 @@ def train(config):
 
     # モデルなどの定義
     print("Create Model...")
-    model_params["skel"]["gcn"]["adj"] = build_coco17_adj(device)
+    model_params["skel"]["stgcn"]["adj"] = build_coco17_adj(device)
     model = create_model(model_params).to(device)
     optimizer = torch.optim.Adam(
         model.parameters(),

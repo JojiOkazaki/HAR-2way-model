@@ -2,15 +2,19 @@ import torch
 import torch.nn as nn
 
 class SkeletonBranch(nn.Module):
-    def __init__(self, gcn, transformer):
+    def __init__(self, stgcn):
         super().__init__()
-        self.gcn = gcn
-        self.transformer = transformer
+        self.stgcn = stgcn
+        
+        self.out_dim = self.stgcn.out_dim
     
     def forward(self, x, confs):
         # キーポイントデータにNaNが入っていた場合
         if torch.isnan(x).any():
             raise RuntimeError("NaN detected in skeleton input")
+
+        return self.stgcn(x, confs)
+        '''
         
         # 入力形状の把握
         B, P, T, J, C = x.shape
@@ -32,3 +36,4 @@ class SkeletonBranch(nn.Module):
         h_trans = h_trans.reshape(B, P, -1) # shape: (B, P, d_trans)
 
         return h_trans
+        '''
