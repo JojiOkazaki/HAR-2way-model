@@ -16,57 +16,64 @@ model:
   architecture:
     img:
       cnn:
-        conv_channels: [3, 32, 64]
+        conv_channels: [3, 16, 32, 64]
         fc_layers: [128]
-        dropouts: [0.0, 0.0, 0.1]
-      mh_attn_pool:
-        dim: 128
-        num_heads: 4
-        dropout: 0.5
+        dropouts: [0.15, 0.15, 0.15, 0.4]
       transformer:
         d_model: 128
         nhead: 8
-        num_layers: 1
+        num_layers: 2
         dim_ff: 256
         max_len: 32
         dropout: 0.5
 
     skel:
       gcn:
-        channels: [3, 16, 32, 64, 128]
-        dropouts: [0.0, 0.0, 0.1, 0.2]
-      mh_attn_pool:
-        dim: 128
-        num_heads: 8
-        dropout: 0.3
+        channels: [3, 64, 128, 256, 256, 128]
+        dropouts: [0.0, 0.0, 0.0, 0.1, 0.1]
       transformer:
         d_model: 128
         nhead: 8
         num_layers: 4
         dim_ff: 512
         max_len: 32
-        dropout: 0.4
+        dropout: 0.1
 
     mlp:
       layers: [256, 128, 101]
-      dropouts: [0.2, 0.2]
+      dropouts: [0.3, 0.3]
 
-  loss_weights: [1.0, 1.0, 3.0]
+  loss_weights: [0.0, 0.0, 1.0]
 
 training:
-  batch_size: 4
+  batch_size: 12
   epochs: 70
-  accum_steps: 4
-  max_norm: 1.0
+  accum_steps: 1
+  max_norm: 5.0
   seed: 42
-  patience: 5
-  min_delta: 0.0001
+  patience: 10
+  min_delta: 0.001
 
 optimizer:
-  lr: 0.0005
-  weight_decay: 0.0001
-  warmup_epochs: 2
-  min_lr_ratio: 0.1
+  lr: 0.0005 # 1e-3になると学習できない
+  weight_decay: 0.00001
+  warmup_epochs: 1
+  min_lr_ratio: 0.3
 
 runtime:
   device: cuda
+
+preprocess:
+  img_aug:
+    p: 0.8
+    jitter: 0.2
+    hue: 0.05
+    noise_std: 0.03
+    p_erasing: 0.5
+    erasing_scale: [0.02, 0.25]
+
+
+# バッチサイズ8: 3.9->4.9GB
+# バッチサイズ9: 3.9->
+# バッチサイズ12: 4.9->
+# バッチサイズ16: 6.9->7.7(ギリギリ共有使ってるかも)

@@ -17,7 +17,7 @@ except ImportError:
 
 
 # 並列処理によるすべてのファイルについてptデータ作成
-def process(video_dir, json_dir, out_img_dir, out_skel_dir, num_workers, T, N, K, W, H):
+def process(video_dir, json_dir, out_img_dir, out_skel_dir, num_workers, P, T, J, W, H):
     labels = sorted(
         d for d in os.listdir(video_dir)
         if os.path.isdir(video_dir / d)
@@ -38,11 +38,11 @@ def process(video_dir, json_dir, out_img_dir, out_skel_dir, num_workers, T, N, K
                 label,
                 label_id,
                 video_filename,
-                T, N, K, W, H
+                T, P, J, W, H
             ))
 
     print(f"Total videos: {len(jobs)}")
-    print(f"Using {num_workers} workers, T={T}, N={N}, K={K}, W={W}, H={H}")
+    print(f"Using {num_workers} workers, P={P}, T={T}, J={J}, W={W}, H={H}")
 
     with Pool(processes=num_workers) as pool:
         for _ in tqdm(pool.imap_unordered(_worker, jobs), total=len(jobs)):
@@ -60,9 +60,9 @@ if __name__ == "__main__":
         DATASET_ROOT / config.OUT_IMAGE_DIR,
         DATASET_ROOT / config.OUT_SKELETON_DIR,
         config.NUM_WORKERS,
+        config.P,
         config.T,
-        config.N,
-        config.K,
+        config.J,
         config.W,
         config.H
     )

@@ -64,18 +64,28 @@ class Trainer():
         
         return outputs_dict
 
-    def compute_aux_losses(self, outputs, label):
+    def compute_aux_losses(self, outputs, label, valid_flat=None):
         losses_dict = {}
         main_loss = 0
 
+        label_flat = label.reshape(-1)  # shape: (B*P, )
+        if valid_flat is not None:
+            label_flat = label_flat[valid_flat] # 有効人物だけ処理する
+
         with autocast("cuda", enabled=self.use_autocast):
             for key, value in outputs.items():
-                losses_dict[key] = F.cross_entropy(value, label)
-                losses_dict[key] *= self.loss_weights[key]
-                main_loss += losses_dict[key]
+                logits_flat = value.reshape(-1, value.size(-1))  # shape: (B*P, num_classes)
+                if valid_flat is not None:
+                    logits_flat = logits_flat[valid_flat] # 有効人物だけ処理する
+
+                loss = F.cross_entropy(logits_flat, label_flat)
+                loss *= self.loss_weights[key]
+
+                losses_dict[key] = loss
+                main_loss += loss
 
         return main_loss, losses_dict
-        
+
     def optimizer_step(self, optimizer, scaler, max_norm=1.0):
         if scaler is not None:
             # 勾配の前処理
@@ -112,13 +122,20 @@ class Trainer():
             keypoints = keypoints.to(self.device, non_blocking=True)
             scores = scores.to(self.device, non_blocking=True)
             label = label.to(self.device, non_blocking=True)
+
+            person_has_keypoint = scores.max(dim=-1).values > 0 # shape: (B, P, T)
+            person_valid = person_has_keypoint.any(dim=-1) # shape: (B,P)
+            valid_flat = person_valid.reshape(-1) # shape: (B*P, )
+            valid_count = int(valid_flat.sum().item())
+            if valid_count == 0:
+                continue  # このバッチは欠損人物しかいない
             
             # モデルの実行、ロスの計算
             outputs = self.forward(frames, keypoints, scores)
-            main_loss, losses = self.compute_aux_losses(outputs, label)
+            main_loss, losses = self.compute_aux_losses(outputs, label, valid_flat=valid_flat)
 
             # 出力用の平均ロス、平均精度の算出
-            batch_size = label.size(0)
+            batch_size = valid_count
             total += batch_size
 
             avg_losses["main"] += main_loss.item() * batch_size
@@ -127,8 +144,12 @@ class Trainer():
                 avg_losses[key] += value.item() * batch_size
 
             for key, value in outputs.items():
-                _, predicted = value.max(1)
-                avg_accs[key] += predicted.eq(label).sum().item()
+                logits_flat = value.reshape(-1, value.size(-1)) # shape: (B*P, num_classes)
+                pred_flat = logits_flat.argmax(dim=1) # shape: (B*P,　)
+                label_flat = label.reshape(-1) # shape: (B*P,　)
+                pred_flat = pred_flat[valid_flat]
+                label_flat = label_flat[valid_flat]
+                avg_accs[key] += pred_flat.eq(label_flat).sum().item()
 
             # 勾配の計算
             if is_train:
@@ -151,6 +172,13 @@ class Trainer():
             self.optimizer_step(optimizer, scaler, max_norm=max_norm)
 
         # 平均ロス、平均精度の計算
+        if total == 0:
+            for k in avg_losses:
+                avg_losses[k] = float("nan")
+            for k in avg_accs:
+                avg_accs[k] = float("nan")
+            return avg_losses, avg_accs
+
         for key in avg_losses:
             avg_losses[key] /= total
         for key in avg_accs:

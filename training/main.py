@@ -8,7 +8,6 @@ from datetime import datetime
 from training.modules.models.cnn import CNN as cnn
 from training.modules.models.gcn import GCN as gcn
 from training.modules.models.mlp import MLP
-from training.modules.models.block import MultiheadAttentionPooling
 from training.modules.models.transformer_encoder import TransformerEncoder
 from training.modules.networks.image_branch import ImageBranch
 from training.modules.networks.skeleton_branch import SkeletonBranch
@@ -19,7 +18,7 @@ from training.modules.utils.lr_scheduler import lr_lambda
 from training.modules.utils.runtime import setup_runtime, load_yaml
 from training.modules.utils.skeleton import build_coco17_adj
 from training.modules.utils.early_stopper import EarlyStopper
-from training.modules.dataset.dataset import SyncedDataset
+from training.modules.dataset.dataset import SyncedDataset, ImageOnlyAugment
 
 from config_base import *
 
@@ -32,7 +31,6 @@ def build_branch(params, branch_class, branch_key):
     BRANCH_MAP = {"cnn": cnn, "gcn": gcn}
     return branch_class(
         BRANCH_MAP[branch_key](**params[branch_key]),
-        MultiheadAttentionPooling(**params["mh_attn_pool"]),
         TransformerEncoder(**params["transformer"]),
     )
 
@@ -43,29 +41,30 @@ def create_model(params):
         MLP(**params["mlp"]),
     )
 
-def create_loader(image_dir, skeleton_dir, file_list, batch_size, num_workers):
+def create_loader(image_dir, skeleton_dir, file_list, batch_size, num_workers, is_train=True, img_aug=None):
     return DataLoader(
         SyncedDataset(
             image_dir,
             skeleton_dir,
-            file_list=file_list
+            file_list=file_list,
+            img_augment=img_aug if is_train else None,
         ), 
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=is_train,
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=True
     )
 
 def train(config):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     # 変数の取り出し
     # logging
     _log_dir = config["logging"]["log_dir"]
     log_dir = ARTIFACT_ROOT / _log_dir / timestamp
-    best_model_name = config["logging"]["best_model_name"]
+    best_model_name = f'{timestamp}_{config["logging"]["best_model_name"]}'
     best_model_path = log_dir / best_model_name
-    csv_name = config["logging"]["csv_name"]
+    csv_name = f'{timestamp}_{config["logging"]["csv_name"]}'
     graph_dir = log_dir / config["logging"]["graph_dir"]
     graph_size = config["logging"]["graph_size"]
     # data
@@ -91,6 +90,12 @@ def train(config):
     min_lr_ratio = config["optimizer"]["min_lr_ratio"]
     # runtime
     device = torch.device(config["runtime"]["device"])
+    # preprocess
+    img_aug = None
+    img_aug_cfg = (config.get("preprocess", {}) or {}).get("image_aug", None)
+
+    if isinstance(img_aug_cfg, dict):
+        img_aug = ImageOnlyAugment(**img_aug_cfg)
 
     # ロガーの設定
     head_keys = ["full", "img", "skel"]
@@ -103,13 +108,21 @@ def train(config):
     )
     logger = Logger(log_dir)
     logger.create_csv(csv_headers, csv_name)
-    logger.create_config(config)
+    logger.create_config(config, filename=f'{timestamp}_config.yaml')
     os.makedirs(graph_dir, exist_ok=True)
 
     # データローダーの定義
     print("Create Data Loader...")
-    train_loader = create_loader(img_pt_dir, skel_pt_dir, train_file_list, batch_size, num_workers)
-    val_loader = create_loader(img_pt_dir, skel_pt_dir, val_file_list, batch_size, num_workers)
+    train_loader = create_loader(
+        img_pt_dir, skel_pt_dir, train_file_list, 
+        batch_size, num_workers, 
+        is_train=True, img_aug=img_aug
+    )
+    val_loader = create_loader(
+        img_pt_dir, skel_pt_dir, val_file_list, 
+        batch_size, num_workers, 
+        is_train=False
+    )
 
     # モデルなどの定義
     print("Create Model...")

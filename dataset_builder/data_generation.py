@@ -7,7 +7,7 @@ from dataset_builder.video_frame_utils import read_frames_by_id
 from dataset_builder.video_frame_utils import find_closest_past_frame
 from dataset_builder.video_frame_utils import crop_person_image
 
-def generate_video_sample(video_path, json_data, T, N, K, W, H):
+def generate_video_sample(video_path, json_data, P, T, J, W, H):
     # 動画データのフレーム数とjsonデータのフレーム数を基にフレーム数を決定
     json_frames = min(json_data["num_frames"], len(json_data["frames"]))
 
@@ -32,7 +32,7 @@ def generate_video_sample(video_path, json_data, T, N, K, W, H):
 
         # jsonデータを取得
         persons = json_data["frames"][frame]["persons"]
-        persons = preprocess_persons(persons, N, K)
+        persons = preprocess_persons(persons, P, J)
 
         person_img_list = []
         skel_list = []
@@ -45,8 +45,8 @@ def generate_video_sample(video_path, json_data, T, N, K, W, H):
             person_img_list.append(person_img)
 
             # 骨格、信頼度スコアの取得
-            skel = np.array([row[:2] for row in person["keypoints_coco"]]) # shape: (K, 2)
-            score = np.array([row[2] for row in person["keypoints_coco"]]) # shape: (K, )
+            skel = np.array([row[:2] for row in person["keypoints_coco"]]) # shape: (J, 2)
+            score = np.array([row[2] for row in person["keypoints_coco"]]) # shape: (J, )
             skel = normalize_skeleton_person_based(skel, score)
             skel_list.append(skel)
             score_list.append(score)
@@ -57,9 +57,17 @@ def generate_video_sample(video_path, json_data, T, N, K, W, H):
     
     # torch.Tensor化
     frames = torch.tensor(frames, dtype=torch.long)
-    person_img_data = torch.from_numpy(np.array(person_img_data, dtype=np.float32)) # shape: (T, N, C_img, H, W)
-    skel_data = torch.from_numpy(np.array(skel_data, dtype=np.float32)) # shape: (T, N, K, C_kp)
-    score_data = torch.from_numpy(np.array(score_data, dtype=np.float32)) # shape: (T, N, K)
+    person_img_data = torch.from_numpy(np.array(person_img_data, dtype=np.float32)) # shape: (T, P, C_img, H, W)
+    skel_data = torch.from_numpy(np.array(skel_data, dtype=np.float32)) # shape: (T, P, J, C_kp)
+    score_data = torch.from_numpy(np.array(score_data, dtype=np.float32)) # shape: (T, P, J)
+    
+    # フレーム次元と人物次元の形状を入れ替える
+    person_img_data = person_img_data.permute(1, 0, 2, 3, 4) # shape: (P, T, C_img, H, W)
+    skel_data = skel_data.permute(1, 0, 2, 3) # shape: (P, T, J, C_kp)
+    score_data = score_data.permute(1, 0, 2) # shape: (P, T, J)
+    person_img_data = person_img_data.contiguous()
+    skel_data = skel_data.contiguous()
+    score_data = score_data.contiguous()
 
     return frames, person_img_data, skel_data, score_data
 

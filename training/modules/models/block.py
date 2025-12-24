@@ -40,7 +40,7 @@ class FCBlock(Block):
         super().__init__()
         self.block = nn.Sequential(
             nn.Linear(in_dim, out_dim),
-            nn.BatchNorm1d(out_dim),
+            nn.LayerNorm(out_dim), # 多次元入力に対応、CNNもバッチサイズが小さいためこれを使用
             nn.ReLU(),
             nn.Dropout(dropout) if dropout > 0.0 else nn.Identity(),
         )

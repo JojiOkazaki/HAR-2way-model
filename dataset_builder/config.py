@@ -7,11 +7,11 @@ OUT_SKELETON_DIR = "torch/skeleton_branch"
 NUM_WORKERS = 8
 
 T = 32
-N = 3
+P = 3
 
 # image
 H = 112
 W = 112
 
 # keypoints
-K = 17
+J = 17
