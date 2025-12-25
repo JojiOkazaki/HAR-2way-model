@@ -2,19 +2,25 @@ import os
 import cv2
 import orjson
 import torch
+import csv
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
 
 import dataset_builder.config as config
 from dataset_builder.script_writer import write_video_sample
-
 from config_base import *
-
 try:
     from config_local import *
 except ImportError:
     pass
 
+def load_label_sentences(csv_path):
+    mapping = {}
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            mapping[int(row["label_id"])] = row["sentence"]
+    return mapping
 
 # 並列処理によるすべてのファイルについてptデータ作成
 def process(video_dir, json_dir, out_img_dir, out_skel_dir, num_workers, P, T, J, W, H):
@@ -23,12 +29,14 @@ def process(video_dir, json_dir, out_img_dir, out_skel_dir, num_workers, P, T, J
         if os.path.isdir(video_dir / d)
     )
     label_ids = {label: i for i, label in enumerate(labels)}
+    label_sentences = load_label_sentences(DATASET_ROOT / "ucf101_sentences_jp.csv")
     
     jobs = []
     for label in label_ids:
         label_dir = video_dir / label
         video_filenames = [f for f in os.listdir(label_dir) if f.endswith(".avi")]
         label_id = label_ids[label]
+        label_sentence = label_sentences[label_id]
         for video_filename in video_filenames:
             jobs.append((
                 video_dir,
@@ -37,8 +45,9 @@ def process(video_dir, json_dir, out_img_dir, out_skel_dir, num_workers, P, T, J
                 out_skel_dir,
                 label,
                 label_id,
+                label_sentence,
                 video_filename,
-                T, P, J, W, H
+                P, T, J, W, H
             ))
 
     print(f"Total videos: {len(jobs)}")

@@ -1,0 +1,8 @@
+artifact_path: "runs/20251225170039"
+
+infer:
+  test_file_list: splits/test_list_id.txt
+  recall_ks: [1, 3, 5, 10]
+  targets: ["full", "img", "skel"]
+  out_dir: "infer"
+  sentence_transformer: stsb-xlm-r-multilingual

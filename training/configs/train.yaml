@@ -35,7 +35,7 @@ model:
         temporal_kernel_size: 9
 
     mlp:
-      layers: [256, 128, 101]
+      layers: [256, 128, 768]
       dropouts: [0.3]
 
   loss_weights: [1.0, 0.5, 0.25]
@@ -48,6 +48,7 @@ training:
   seed: 42
   patience: 10
   min_delta: 0.001
+  recall_k: 3
 
 optimizer:
   lr: 0.0005 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)
@@ -58,14 +59,14 @@ optimizer:
 runtime:
   device: cuda
 
-preprocess:
-  img_aug:
-    p: 0.4
-    jitter: 0.1
-    hue: 0.02
-    noise_std: 0.01
-    p_erasing: 0.0
-    erasing_scale: [0.02, 0.10]
+#preprocess:
+#  img_aug:
+#    p: 0.4
+#    jitter: 0.1
+#    hue: 0.02
+#    noise_std: 0.01
+#    p_erasing: 0.0
+#    erasing_scale: [0.02, 0.10]
 
 
 

@@ -11,6 +11,17 @@ def _normalize_adj(adj):
     D_inv_sqrt = torch.diag(D_inv_sqrt)
     return D_inv_sqrt @ A @ D_inv_sqrt
 
+class ChannelLayerNorm(nn.Module):
+    def __init__(self, num_channels, eps=1e-5, affine=True):
+        super().__init__()
+        self.ln = nn.LayerNorm(num_channels, eps=eps, elementwise_affine=affine)
+
+    def forward(self, x):
+        x = x.permute(0, 2, 3, 1).contiguous() # (N, C, T, V) -> (N, T, V, C)
+        x = self.ln(x)
+        x = x.permute(0, 3, 1, 2).contiguous() # (N, T, V, C) -> (N, C, T, V)
+        return x
+
 class GCNLayer(nn.Module):
     def __init__(self, in_dim, out_dim, adj):
         super().__init__()
@@ -67,7 +78,7 @@ class STGCNBlock(BaseBlock):
 
         # 時間畳み込み層
         self.tcn = nn.Sequential(
-            nn.BatchNorm2d(out_dim),
+            ChannelLayerNorm(out_dim),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_dim, out_dim,
                 kernel_size=(temporal_kernel_size, 1),
@@ -75,7 +86,7 @@ class STGCNBlock(BaseBlock):
                 padding=(pad_t, 0),
                 bias=False,
             ),
-            nn.BatchNorm2d(out_dim),
+            ChannelLayerNorm(out_dim),
             self._make_dropout(dropout),
         )
 
@@ -85,7 +96,7 @@ class STGCNBlock(BaseBlock):
         else:
             self.residual = nn.Sequential(
                 nn.Conv2d(in_dim, out_dim, kernel_size=1, stride=(stride, 1), bias=False),
-                nn.BatchNorm2d(out_dim),
+                ChannelLayerNorm(out_dim),
             )
 
         self.relu = nn.ReLU(inplace=True)

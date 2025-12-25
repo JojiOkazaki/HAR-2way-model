@@ -117,12 +117,14 @@ class SyncedDataset(Dataset):
         frames = img_data["images"] # shape: (P, T, C_img, H, W)
         keypoints = skel_data["skeletons"] # shape: (P, T, J, C_kp)
         scores = skel_data["scores"] # shape: (P, T, J)
-        labels = img_data["labels"] # shape: (P, )
+        labels = img_data["labels"] # shape: (P, D)
 
         frames = frames.float()
         keypoints = keypoints.float()
         scores = scores.float()
+        labels = labels.float()
 
+        # 画像データの前処理
         if self.img_augment is not None:
             frames = self.img_augment(frames)
 

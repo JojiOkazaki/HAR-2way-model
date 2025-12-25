@@ -5,12 +5,13 @@ from torch.nn.utils import clip_grad_norm_
 import torch.nn.functional as F
 
 class Trainer():
-    def __init__(self, model, head_keys, device, accum_steps=1, loss_weights=None):
+    def __init__(self, model, head_keys, device, accum_steps=1, loss_weights=None, recall_k=1):
         self.model = model
         self.head_keys = head_keys
         self.accum_steps = accum_steps
         self.set_device(device)
         self.set_loss_weights(loss_weights)
+        self.recall_k = recall_k
 
     def _check_loss_weights(self, loss_weights):
         if isinstance(loss_weights, dict):
@@ -68,23 +69,74 @@ class Trainer():
         losses_dict = {}
         main_loss = 0
 
-        label_flat = label.reshape(-1)  # shape: (B*P, )
+        label_flat = label  # shape: (B, D)
         if valid_flat is not None:
-            label_flat = label_flat[valid_flat] # 有効人物だけ処理する
+            label_flat = label_flat[valid_flat] # 有効人物だけ処理する, shape: (B', D)
 
         with autocast("cuda", enabled=self.use_autocast):
             for key, value in outputs.items():
-                logits_flat = value.reshape(-1, value.size(-1))  # shape: (B*P, num_classes)
+                pred_flat = value.reshape(-1, value.size(-1))  # shape: (B', D)
                 if valid_flat is not None:
-                    logits_flat = logits_flat[valid_flat] # 有効人物だけ処理する
+                    pred_flat = pred_flat[valid_flat] # 有効人物だけ処理する
 
-                loss = F.cross_entropy(logits_flat, label_flat)
+                cos = F.cosine_similarity(pred_flat, label_flat, dim=-1) # shape: (B', )
+                loss = (1.0 - cos).mean()
+
                 loss *= self.loss_weights[key]
-
                 losses_dict[key] = loss
                 main_loss += loss
 
         return main_loss, losses_dict
+
+    def compute_contrastive_losses(self, outputs, label, temperature=0.07):
+        losses_dict = {}
+        main_loss = 0.0
+
+        # label: (B, D)
+        label_norm = F.normalize(label, dim=-1).detach()
+        B = label_norm.size(0)
+
+        with autocast("cuda", enabled=self.use_autocast):
+            for key, value in outputs.items():
+                pred = value  # (B, D) の想定
+                pred_norm = F.normalize(pred, dim=-1)
+
+                if B < 2:
+                    cos = F.cosine_similarity(pred_norm, label_norm, dim=-1)
+                    loss = (1.0 - cos).mean()
+                else:
+                    logits = (pred_norm.float() @ label_norm.float().T) / float(temperature)
+                    targets = torch.arange(B, device=logits.device)
+                    loss = 0.5 * (F.cross_entropy(logits, targets) + F.cross_entropy(logits.T, targets))
+
+                loss = loss * self.loss_weights[key]
+                losses_dict[key] = loss
+                main_loss = main_loss + loss
+
+        return main_loss, losses_dict
+
+    def recall_at_k(self, pred, label):
+        """
+        pred:  (B, D)
+        label: (B, D)
+        return: スカラー（0〜1）
+        """
+        pred = F.normalize(pred, dim=-1)
+        label = F.normalize(label, dim=-1)
+
+        # (B,B) 類似度行列。i行の正解は i列。
+        sim = pred.float() @ label.float().T
+        B = sim.size(0)
+        if B == 0:
+            return torch.tensor(float("nan"), device=sim.device)
+        if B == 1:
+            return torch.tensor(1.0, device=sim.device)  # 正例しかないので常に当たる
+
+        k_eff = min(self.recall_k, B)
+        topk = sim.topk(k_eff, dim=1).indices  # (B, k)
+        gt = torch.arange(B, device=sim.device).unsqueeze(1)  # (B,1)
+        hit = (topk == gt).any(dim=1).float()  # (B,)
+        return hit.mean()  # 0〜1
 
     def optimizer_step(self, optimizer, scaler, max_norm=1.0):
         if scaler is not None:
@@ -131,17 +183,25 @@ class Trainer():
                 continue  # このバッチは欠損人物しかいない
             
             B, P = scores.shape[:2]
-            frames   = frames.reshape(B * P, *frames.shape[2:])
+            frames = frames.reshape(B * P, *frames.shape[2:])
             keypoints = keypoints.reshape(B * P, *keypoints.shape[2:])
-            scores   = scores.reshape(B * P, *scores.shape[2:])
-            label    = label.reshape(B * P, *label.shape[2:])  # labelが(B,P)なら(B*P)になる
+            scores = scores.reshape(B * P, *scores.shape[2:])
+            label = label.reshape(B * P, *label.shape[2:])
+
+            idx = valid_flat.nonzero(as_tuple=False).squeeze(1)  # shape: (valid_count,)
+            frames = frames[idx]
+            keypoints = keypoints[idx]
+            scores = scores[idx]
+            label = label[idx]
+
+            valid_flat = None
 
             # モデルの実行、ロスの計算
             outputs = self.forward(frames, keypoints, scores)
-            main_loss, losses = self.compute_aux_losses(outputs, label, valid_flat=valid_flat)
+            main_loss, losses = self.compute_contrastive_losses(outputs, label, temperature=0.07)
 
             # 出力用の平均ロス、平均精度の算出
-            batch_size = valid_count
+            batch_size = frames.size(0)
             total += batch_size
 
             avg_losses["main"] += main_loss.item() * batch_size
@@ -150,12 +210,11 @@ class Trainer():
                 avg_losses[key] += value.item() * batch_size
 
             for key, value in outputs.items():
-                logits_flat = value.reshape(-1, value.size(-1)) # shape: (B*P, num_classes)
-                pred_flat = logits_flat.argmax(dim=1) # shape: (B*P,　)
-                label_flat = label.reshape(-1) # shape: (B*P,　)
-                pred_flat = pred_flat[valid_flat]
-                label_flat = label_flat[valid_flat]
-                avg_accs[key] += pred_flat.eq(label_flat).sum().item()
+                pred_flat = value.reshape(-1, value.size(-1))  # (B*P, D)
+                label_flat = label.reshape(-1, label.size(-1)) # (B*P, D)
+
+                r = self.recall_at_k(pred_flat, label_flat)
+                avg_accs[key] += (r.item() * batch_size)  # 後で total で割る
 
             # 勾配の計算
             if is_train:

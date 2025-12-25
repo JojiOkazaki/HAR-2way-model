@@ -90,6 +90,7 @@ def train(config):
     max_norm = config["training"]["max_norm"]
     patience = config["training"]["patience"]
     min_delta = config["training"]["min_delta"]
+    recall_k = config["training"]["recall_k"]
     # optimizer
     lr = config["optimizer"]["lr"]
     weight_decay = config["optimizer"]["weight_decay"]
@@ -98,11 +99,13 @@ def train(config):
     # runtime
     device = torch.device(config["runtime"]["device"])
     # preprocess
+    '''
     img_aug = None
     img_aug_cfg = (config.get("preprocess", {}) or {}).get("img_aug", None)
 
     if isinstance(img_aug_cfg, dict):
         img_aug = ImageOnlyAugment(**img_aug_cfg)
+    '''
 
     # ロガーの設定
     head_keys = ["full", "img", "skel"]
@@ -123,7 +126,7 @@ def train(config):
     train_loader = create_loader(
         img_pt_dir, skel_pt_dir, train_file_list, 
         batch_size, num_workers, 
-        is_train=True, img_aug=img_aug
+        is_train=True, #img_aug=img_aug
     )
     val_loader = create_loader(
         img_pt_dir, skel_pt_dir, val_file_list, 
@@ -156,7 +159,7 @@ def train(config):
         lr_lambda=lambda e: lr_lambda(e, warmup_epochs, epochs, min_lr_ratio)
     )
 
-    trainer = Trainer(model, head_keys, device, accum_steps=accum_steps, loss_weights=loss_weights)
+    trainer = Trainer(model, head_keys, device, accum_steps=accum_steps, loss_weights=loss_weights, recall_k=recall_k)
     early_stopper = EarlyStopper(patience=patience, min_delta=min_delta, path=best_model_path)
 
     # 学習

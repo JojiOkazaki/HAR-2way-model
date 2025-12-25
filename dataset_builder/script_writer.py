@@ -1,10 +1,29 @@
 import os
 import torch
 import orjson
+from sentence_transformers import SentenceTransformer
 
+import dataset_builder.config as config
 from dataset_builder.data_generation import generate_video_sample
 
-def write_video_sample(video_dir, json_dir, out_img_dir, out_skel_dir, label, label_id, video_filename, P, T, J, W, H):
+_ST_MODEL = None
+_LABEL_EMB_CACHE = {}
+
+def _get_st_model():
+    global _ST_MODEL
+    if _ST_MODEL is None:
+        _ST_MODEL = SentenceTransformer(config.SENTENCE_TRANSFORMER_MODEL_NAME)
+    return _ST_MODEL
+
+def _get_label_embedding(label_id: int, sentence: str) -> torch.Tensor:
+    # 各workerプロセス内で label_id ごとに一度だけ encode してキャッシュ
+    if label_id not in _LABEL_EMB_CACHE:
+        model = _get_st_model()
+        emb = model.encode(sentence, convert_to_tensor=True)  # shape: (D,)
+        _LABEL_EMB_CACHE[label_id] = emb.detach().cpu().to(torch.float32)
+    return _LABEL_EMB_CACHE[label_id]
+
+def write_video_sample(video_dir, json_dir, out_img_dir, out_skel_dir, label, label_id, label_sentence, video_filename, P, T, J, W, H):
     # 出力先ディレクトリの取得
     out_img_dir = out_img_dir / label
     out_skel_dir = out_skel_dir / label
@@ -29,14 +48,17 @@ def write_video_sample(video_dir, json_dir, out_img_dir, out_skel_dir, label, la
 
     # 処理
     frames, img_data, skel_data, score_data = generate_video_sample(video_path, json_data, P, T, J, W, H)
-    labels = torch.full((P,), label_id, dtype=torch.long)
+    label_emb = _get_label_embedding(label_id, label_sentence) # shape: (D, )
+    labels = label_emb.unsqueeze(0).repeat(P, 1).contiguous() # shape: (P, D)
 
     # ptファイルを作成
     torch.save(
-        {"images": img_data, "frames": frames, "labels": labels},
+        {"images": img_data, "frames": frames, "labels": labels,
+        "label_id": label_id, "label_sentence": label_sentence},
         out_img_path,
     )
     torch.save(
-        {"skeletons": skel_data, "scores": score_data, "frames": frames, "labels": labels},
+        {"skeletons": skel_data, "scores": score_data, "frames": frames, "labels": labels,
+        "label_id": label_id, "label_sentence": label_sentence},
         out_skel_path,
     )
