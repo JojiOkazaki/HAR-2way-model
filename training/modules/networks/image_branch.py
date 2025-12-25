@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 class ImageBranch(nn.Module):
@@ -9,18 +8,20 @@ class ImageBranch(nn.Module):
 
     def forward(self, x, confs):
         # 入力形状の把握
-        B, P, T, C, H, W = x.shape
+        B, T, C, H, W = x.shape
 
         # CNN
-        h_cnn = x.reshape(-1, C, H, W) # shape: (B*P*T, C, H, W)
-        h_cnn = self.cnn(h_cnn) # shape: (B*P*T, d_cnn)
-        h_cnn = h_cnn.reshape(B*P, T, -1) # shape: (B*P, T, d_cnn)
+        h_cnn = x.reshape(-1, C, H, W) # shape: (B*T, C, H, W)
+        h_cnn = self.cnn(h_cnn) # shape: (B*T, d_cnn)
+        h_cnn = h_cnn.reshape(B, T, -1) # shape: (B*P, T, d_cnn)
 
         # TransformerEncoder
-        person_has_keypoint = confs.max(dim=-1).values > 0 # shape: (B, P, T)
+        person_has_keypoint = confs.max(dim=-1).values > 0 # shape: (B, T)
         frame_mask = ~person_has_keypoint # Trueの時マスクが有効になる
-        frame_mask = frame_mask.reshape(B*P, T) # shape: (B*P, T)
-        h_trans = self.transformer(h_cnn, frame_mask) # shape: (B*P, d_trans)
-        h_trans = h_trans.reshape(B, P, -1) # shape: (B, P, d_trans)
+        frame_mask = frame_mask.reshape(B, T) # shape: (B, T)
+        h_trans = self.transformer(h_cnn, frame_mask) # shape: (B, d_trans)
 
-        return h_trans
+        return h_trans # shape: (B, d_trans)
+
+    def out_dim(self):
+        return self.transformer.cls_token.size(-1)

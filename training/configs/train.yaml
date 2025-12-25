@@ -10,7 +10,7 @@ data:
   skel_pt_dir: torch/skeleton_branch
   train_file_list: splits/train_list.txt
   val_file_list: splits/val_list.txt
-  num_workers: 10
+  num_workers: 14
 
 model:
   architecture:
@@ -18,7 +18,8 @@ model:
       cnn:
         conv_channels: [3, 16, 32, 64]
         fc_layers: [128]
-        dropouts: [0.15, 0.15, 0.15, 0.4]
+        dropouts: [0.15, 0.15, 0.4]
+        input_size: [112, 112]
       transformer:
         d_model: 128
         nhead: 8
@@ -35,36 +36,37 @@ model:
 
     mlp:
       layers: [256, 128, 101]
-      dropouts: [0.3, 0.3]
+      dropouts: [0.3]
 
-  loss_weights: [0.0, 1.0, 2.0]
+  loss_weights: [1.0, 0.5, 0.25]
 
 training:
   batch_size: 8
   epochs: 70
   accum_steps: 3
-  max_norm: 5.0
+  max_norm: 5.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
   patience: 10
   min_delta: 0.001
 
 optimizer:
   lr: 0.0005 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)
-  weight_decay: 0.00001
-  warmup_epochs: 1
-  min_lr_ratio: 0.3
+  weight_decay: 0.001
+  warmup_epochs: 1 # 学習の立ち上がりを遅くすることで序盤を安定させる。小さいと立ち上がりが速くなる。
+  min_lr_ratio: 0.1 # 学習後半で学習率を小さくすることで振動を安定させる。小さいと最終学習率が小さくなる。
 
 runtime:
   device: cuda
 
 preprocess:
   img_aug:
-    p: 0.8
-    jitter: 0.2
-    hue: 0.05
-    noise_std: 0.03
-    p_erasing: 0.5
-    erasing_scale: [0.02, 0.25]
+    p: 0.4
+    jitter: 0.1
+    hue: 0.02
+    noise_std: 0.01
+    p_erasing: 0.0
+    erasing_scale: [0.02, 0.10]
+
 
 
 # バッチサイズ8: 3.9->4.9GB

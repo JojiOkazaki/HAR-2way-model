@@ -1,1 +1,6 @@
-# from .dataset import SyncedDataset
+from .dataset import SyncedDataset, ImageOnlyAugment
+
+__all__ = [
+    "SyncedDataset",
+    "ImageOnlyAugment",
+]

@@ -5,20 +5,20 @@ from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from datetime import datetime
 
-from training.modules.models.cnn import CNN
-from training.modules.models.stgcn import STGCN
-from training.modules.models.mlp import MLP
-from training.modules.models.transformer_encoder import TransformerEncoder
-from training.modules.networks.image_branch import ImageBranch
-from training.modules.networks.skeleton_branch import SkeletonBranch
-from training.modules.networks.full_model import FullModel
-from training.modules.trainer.trainer import Trainer
-from training.modules.utils.logger import Logger
-from training.modules.utils.lr_scheduler import lr_lambda
-from training.modules.utils.runtime import setup_runtime, load_yaml
-from training.modules.utils.skeleton import build_coco17_adj
-from training.modules.utils.early_stopper import EarlyStopper
-from training.modules.dataset.dataset import SyncedDataset, ImageOnlyAugment
+from training.modules.models import CNN
+from training.modules.models import STGCN
+from training.modules.models import MLP
+from training.modules.models import TransformerEncoder
+from training.modules.networks import ImageBranch
+from training.modules.networks import SkeletonBranch
+from training.modules.networks import FullModel
+from training.modules.trainer import Trainer
+from training.modules.utils import Logger
+from training.modules.utils import lr_lambda
+from training.modules.utils import setup_runtime, load_yaml
+from training.modules.utils import build_coco17_adj
+from training.modules.utils import EarlyStopper
+from training.modules.dataset import SyncedDataset, ImageOnlyAugment
 
 from config_base import *
 
@@ -99,7 +99,7 @@ def train(config):
     device = torch.device(config["runtime"]["device"])
     # preprocess
     img_aug = None
-    img_aug_cfg = (config.get("preprocess", {}) or {}).get("image_aug", None)
+    img_aug_cfg = (config.get("preprocess", {}) or {}).get("img_aug", None)
 
     if isinstance(img_aug_cfg, dict):
         img_aug = ImageOnlyAugment(**img_aug_cfg)
@@ -135,10 +135,20 @@ def train(config):
     print("Create Model...")
     model_params["skel"]["stgcn"]["adj"] = build_coco17_adj(device)
     model = create_model(model_params).to(device)
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=lr,
-        weight_decay=weight_decay
+
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if param.ndim == 1 or name.endswith(".bias"):
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=lr
     )
     scaler = GradScaler() if device.type == "cuda" else None
     scheduler = torch.optim.lr_scheduler.LambdaLR(

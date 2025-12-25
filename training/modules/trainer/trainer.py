@@ -130,6 +130,12 @@ class Trainer():
             if valid_count == 0:
                 continue  # このバッチは欠損人物しかいない
             
+            B, P = scores.shape[:2]
+            frames   = frames.reshape(B * P, *frames.shape[2:])
+            keypoints = keypoints.reshape(B * P, *keypoints.shape[2:])
+            scores   = scores.reshape(B * P, *scores.shape[2:])
+            label    = label.reshape(B * P, *label.shape[2:])  # labelが(B,P)なら(B*P)になる
+
             # モデルの実行、ロスの計算
             outputs = self.forward(frames, keypoints, scores)
             main_loss, losses = self.compute_aux_losses(outputs, label, valid_flat=valid_flat)
