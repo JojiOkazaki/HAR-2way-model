@@ -20,7 +20,7 @@ J = 17
 MIN_FRAMES = 30
 
 # 1動画あたり最大人物数（これを超える人物は無視）
-MAX_P = 6
+MAX_P = 3
 
 
 MIN_VALID_T = 16
