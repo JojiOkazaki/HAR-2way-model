@@ -6,10 +6,10 @@ logging:
   graph_size: [6, 4]
 
 data:
-  img_pt_dir: torch/image_branch
-  skel_pt_dir: torch/skeleton_branch
-  train_file_list: splits/train_list.txt
-  val_file_list: splits/val_list.txt
+  img_pt_dir: processed/pt
+  skel_pt_dir: processed/pt
+  train_file_list: processed/splits/train_list.txt
+  val_file_list: processed/splits/val_list.txt
   num_workers: 14
 
 model:
@@ -41,14 +41,15 @@ model:
   loss_weights: [1.0, 0.5, 0.25]
 
 training:
-  batch_size: 8
-  epochs: 70
+  batch_size: 4
+  epochs: 100
   accum_steps: 3
   max_norm: 5.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
-  patience: 10
+  patience: 5
   min_delta: 0.001
   recall_k: 3
+  temperature: 0.1 # 大きくするとrecallが伸びる
 
 optimizer:
   lr: 0.0005 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)

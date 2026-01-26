@@ -1,4 +1,4 @@
-artifact_path: "runs/20251225170039"
+artifact_path: "runs/20251225220111"
 
 infer:
   test_file_list: splits/test_list_id.txt

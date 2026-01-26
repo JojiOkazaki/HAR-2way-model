@@ -1,11 +1,8 @@
-import os
-from glob import glob
-
 import torch
+from pathlib import Path
 from torch.utils.data import Dataset
-
-import torch
 import torchvision.transforms.functional as TF
+
 
 class ImageOnlyAugment:
     def __init__(
@@ -41,7 +38,6 @@ class ImageOnlyAugment:
             s = self._u(max(0.0, 1.0 - j), 1.0 + j, device)
             h = self._u(-self.hue, self.hue, device)
 
-            # 適用順をランダム化
             ops = ["b", "c", "s", "h"]
             for i in torch.randperm(4, device=device).tolist():
                 if ops[i] == "b":
@@ -73,58 +69,130 @@ class ImageOnlyAugment:
 
         return x.reshape(*lead, C, H, W)
 
+
+def _torch_load(path: Path):
+    try:
+        return torch.load(path, weights_only=True)
+    except TypeError:
+        # 古いPyTorch互換
+        return torch.load(path)
+
+
+def pad_person_collate(batch):
+    """
+    P（人物数）が可変なので、バッチ内の最大Pにゼロ埋めして揃える。
+
+    batch:
+      [(frames, keypoints, scores, labels), ...]
+    それぞれ:
+      frames    : (P,T,C,H,W)
+      keypoints : (P,T,J,2)
+      scores    : (P,T,J)
+      labels    : (P,D)
+
+    returns:
+      frames    : (B,Pmax,T,C,H,W)
+      keypoints : (B,Pmax,T,J,2)
+      scores    : (B,Pmax,T,J)
+      labels    : (B,Pmax,D)
+    """
+    frames_list, keypoints_list, scores_list, labels_list = zip(*batch)
+
+    B = len(frames_list)
+    P_max = max(int(x.shape[0]) for x in frames_list) if B > 0 else 0
+
+    # 基本shape（P以外は共通前提）
+    _, T, C, H, W = frames_list[0].shape
+    _, _, J, Ck = keypoints_list[0].shape
+    _, D = labels_list[0].shape
+
+    frames_out = torch.zeros((B, P_max, T, C, H, W), dtype=frames_list[0].dtype)
+    keypoints_out = torch.zeros((B, P_max, T, J, Ck), dtype=keypoints_list[0].dtype)
+    scores_out = torch.zeros((B, P_max, T, J), dtype=scores_list[0].dtype)
+    labels_out = torch.zeros((B, P_max, D), dtype=labels_list[0].dtype)
+
+    for i in range(B):
+        P = int(frames_list[i].shape[0])
+        if P == 0:
+            continue
+        frames_out[i, :P] = frames_list[i]
+        keypoints_out[i, :P] = keypoints_list[i]
+        scores_out[i, :P] = scores_list[i]
+        labels_out[i, :P] = labels_list[i]
+
+    return frames_out, keypoints_out, scores_out, labels_out
+
+
 class SyncedDataset(Dataset):
     def __init__(self, img_torch_path, skel_torch_path, file_list=None, img_augment=None):
-        self.img_torch_path = img_torch_path
-        self.skel_torch_path = skel_torch_path
+        self.img_torch_path = Path(img_torch_path)
+        self.skel_torch_path = Path(skel_torch_path) if skel_torch_path is not None else None
         self.img_augment = img_augment
 
-        # サンプルを取得する
+        # 新形式: 単一pt（images/skeletons/scores/labels 同梱）
+        self._single_pt = (
+            self.skel_torch_path is None
+            or self.skel_torch_path.resolve() == self.img_torch_path.resolve()
+        )
+
         if file_list is None:
-            self.samples = sorted(self.img_torch_path.glob("*/*.pt"))
+            # フラット/サブフォルダ両対応
+            self.samples = sorted(self.img_torch_path.rglob("*.pt"))
         else:
             self.samples = []
-            with open(file_list, "r") as f:
-                for line in f:
+            with open(file_list, "r", encoding="utf-8") as f:
+                for line_no, line in enumerate(f, 1):
                     line = line.strip()
                     if not line:
                         continue
-
-                    path, label = line.split()
-                    img_path = self.img_torch_path / path
-                    self.samples.append(img_path)
+                    parts = line.split()
+                    if len(parts) != 2:
+                        raise ValueError(f"{file_list}:{line_no}: expected 2 columns, got {len(parts)}: {line!r}")
+                    relpath, _ = parts
+                    self.samples.append(self.img_torch_path / relpath)
 
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, id):
-        # 画像ptファイルパスを取得
-        img_path = self.samples[id]
+    def __getitem__(self, idx):
+        img_path = self.samples[idx]
+        if not img_path.exists():
+            raise FileNotFoundError(img_path)
 
-        # 画像ptファイルパスから骨格ptファイルパスを取得
-        labelname = img_path.parent.name
-        filename = img_path.name
-        skel_path = self.skel_torch_path / labelname / filename
+        if self._single_pt:
+            data = _torch_load(img_path)
+            frames = data["images"]         # (P,T,C,H,W) uint8
+            keypoints = data["skeletons"]   # (P,T,J,2)
+            scores = data["scores"]         # (P,T,J)
+            labels = data["labels"]         # (P,D)
+        else:
+            # 旧形式（image_branch/skeleton_branch が別pt）の互換
+            labelname = img_path.parent.name
+            filename = img_path.name
+            skel_path = self.skel_torch_path / labelname / filename
+            if not skel_path.exists():
+                raise FileNotFoundError(skel_path)
 
-        if not skel_path.exists():
-            raise FileNotFoundError(skel_path)
+            img_data = _torch_load(img_path)
+            skel_data = _torch_load(skel_path)
 
-        # 画像、骨格ptファイルを読み込み
-        img_data = torch.load(img_path, weights_only=True)
-        skel_data = torch.load(skel_path, weights_only=True)
+            frames = img_data["images"]
+            keypoints = skel_data["skeletons"]
+            scores = skel_data["scores"]
+            labels = img_data["labels"]
 
-        # 各データを取得
-        frames = img_data["images"] # shape: (P, T, C_img, H, W)
-        keypoints = skel_data["skeletons"] # shape: (P, T, J, C_kp)
-        scores = skel_data["scores"] # shape: (P, T, J)
-        labels = img_data["labels"] # shape: (P, D)
+        # images: uint8(0..255) -> float(0..1)
+        if frames.dtype == torch.uint8:
+            frames = frames.float().div_(255.0)
+        else:
+            frames = frames.float()
+            if frames.numel() > 0 and float(frames.max().item()) > 1.5:
+                frames = frames.div(255.0)
 
-        frames = frames.float()
         keypoints = keypoints.float()
         scores = scores.float()
         labels = labels.float()
 
-        # 画像データの前処理
         if self.img_augment is not None:
             frames = self.img_augment(frames)
 

@@ -155,7 +155,7 @@ class Trainer():
         # 勾配のクリア
         optimizer.zero_grad(set_to_none=True)
 
-    def run_one_epoch(self, loader, optimizer=None, scaler=None, max_norm=1.0, is_train=True):
+    def run_one_epoch(self, loader, optimizer=None, scaler=None, max_norm=1.0, temperature=0.07, is_train=True):
         total = 0
         accum_counter = 0
         avg_accs = {k: 0 for k in self.head_keys}
@@ -175,8 +175,12 @@ class Trainer():
             scores = scores.to(self.device, non_blocking=True)
             label = label.to(self.device, non_blocking=True)
 
-            person_has_keypoint = scores.max(dim=-1).values > 0 # shape: (B, P, T)
-            person_valid = person_has_keypoint.any(dim=-1) # shape: (B,P)
+            person_has_keypoint = scores.max(dim=-1).values > 0  # (B,P,T)
+            valid_len = person_has_keypoint.sum(dim=-1)          # (B,P)
+
+            MIN_VALID_T = 16  # 例: 32中16フレーム以上（ここは調整用）
+            person_valid = valid_len >= MIN_VALID_T              # (B,P)
+
             valid_flat = person_valid.reshape(-1) # shape: (B*P, )
             valid_count = int(valid_flat.sum().item())
             if valid_count == 0:
@@ -198,7 +202,7 @@ class Trainer():
 
             # モデルの実行、ロスの計算
             outputs = self.forward(frames, keypoints, scores)
-            main_loss, losses = self.compute_contrastive_losses(outputs, label, temperature=0.07)
+            main_loss, losses = self.compute_contrastive_losses(outputs, label, temperature=temperature)
 
             # 出力用の平均ロス、平均精度の算出
             batch_size = frames.size(0)
