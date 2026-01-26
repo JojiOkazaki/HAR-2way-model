@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import random
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from multiprocessing import Pool, freeze_support
@@ -26,7 +28,7 @@ VIDEO_EXTS = {".avi", ".mp4"}
 
 @dataclass(frozen=True)
 class AllListRow:
-    video_pt: str     # "<stem>.pt"
+    video_pt: str  # "<stem>.pt"
     person_id: int
     label_id: int
 
@@ -195,11 +197,13 @@ def read_all_list(all_list_path: Path) -> List[AllListRow]:
         if not video_pt.lower().endswith(".pt"):
             raise ValueError(f"{all_list_path}:{line_no}: first column must end with .pt: {raw_line!r}")
 
-        rows.append(AllListRow(
-            video_pt=video_pt,
-            person_id=int(pid_s),
-            label_id=int(lid_s),
-        ))
+        rows.append(
+            AllListRow(
+                video_pt=video_pt,
+                person_id=int(pid_s),
+                label_id=int(lid_s),
+            )
+        )
     return rows
 
 
@@ -223,22 +227,233 @@ def build_jobs_from_all_list(dataset_dir: Path, all_list_path: Path) -> List[Tup
         # 念のためここでも MAX_P を適用（all_list側で適用済みでも安全）
         person_label_pairs = person_label_pairs[:max_p]
 
-        jobs.append((
-            _to_path(dataset_dir),
-            stem,
-            person_label_pairs,        # [(person_id, label_id), ...]
-            int(config.T),
-            int(config.J),
-            int(config.W),
-            int(config.H),
-            min_frames,
-            max_p,
-        ))
+        jobs.append(
+            (
+                _to_path(dataset_dir),
+                stem,
+                person_label_pairs,  # [(person_id, label_id), ...]
+                int(config.T),
+                int(config.J),
+                int(config.W),
+                int(config.H),
+                min_frames,
+                max_p,
+            )
+        )
     return jobs
 
 
 def _worker(args):
     return write_video_sample(*args)
+
+
+def _normalize_ratios(train_r: float, val_r: float, test_r: float) -> Dict[str, float]:
+    for name, r in [("TRAIN_RATIO", train_r), ("VAL_RATIO", val_r), ("TEST_RATIO", test_r)]:
+        if not isinstance(r, (int, float)) or math.isnan(float(r)) or math.isinf(float(r)):
+            raise ValueError(f"{name} must be a finite number. got: {r!r}")
+        if float(r) < 0:
+            raise ValueError(f"{name} must be >= 0. got: {r!r}")
+
+    s = float(train_r) + float(val_r) + float(test_r)
+    if s <= 0:
+        raise ValueError(f"TRAIN_RATIO+VAL_RATIO+TEST_RATIO must be > 0. got sum={s}")
+
+    return {
+        "train": float(train_r) / s,
+        "val": float(val_r) / s,
+        "test": float(test_r) / s,
+    }
+
+
+def _allocate_counts(total: int, ratios: Dict[str, float]) -> Dict[str, int]:
+    """
+    total を ratios に従って整数配分する（largest remainder method）。
+    """
+    if total < 0:
+        raise ValueError(f"total must be >=0. got: {total}")
+
+    keys = ["train", "val", "test"]
+    raw = {k: total * float(ratios[k]) for k in keys}
+    floors = {k: int(math.floor(raw[k])) for k in keys}
+    rem = {k: raw[k] - floors[k] for k in keys}
+
+    used = sum(floors.values())
+    left = total - used
+    order = sorted(keys, key=lambda k: (-rem[k], k))  # tie: stable by name
+
+    out = dict(floors)
+    i = 0
+    while left > 0:
+        k = order[i % len(order)]
+        out[k] += 1
+        left -= 1
+        i += 1
+    return out
+
+
+def _collect_existing_pt_stems(dataset_dir: Path) -> set[str]:
+    pt_dir = _to_path(dataset_dir) / "processed" / "pt"
+    if not pt_dir.is_dir():
+        return set()
+    stems = set()
+    for p in pt_dir.glob("*.pt"):
+        if p.is_file():
+            stems.add(p.stem)
+    return stems
+
+
+def build_split_lists(dataset_dir: Path, all_list_path: Path) -> None:
+    """
+    all_list.txt（人物行）をもとに、動画（pt）単位で split を作る。
+    出力（2列）:
+      processed/splits/train_list.txt
+      processed/splits/val_list.txt
+      processed/splits/test_list.txt
+
+    各行: "<stem>.pt 0"
+    """
+    dataset_dir = _to_path(dataset_dir)
+    ensure_processed_dirs(dataset_dir)
+
+    train_r = globals().get("TRAIN_RATIO", None)
+    val_r = globals().get("VAL_RATIO", None)
+    test_r = globals().get("TEST_RATIO", None)
+    if train_r is None or val_r is None or test_r is None:
+        raise RuntimeError("TRAIN_RATIO / VAL_RATIO / TEST_RATIO が定義されていません（config_base.py を確認してください）。")
+
+    ratios = _normalize_ratios(float(train_r), float(val_r), float(test_r))
+    seed = int(globals().get("SPLIT_SEED", 42))
+
+    existing_stems = _collect_existing_pt_stems(dataset_dir)
+    if not existing_stems:
+        print(f"[split] skip: no pt files found: {dataset_dir / 'processed' / 'pt'}")
+        return
+
+    # stem -> label_id -> count（人物数）
+    video_label_counts: Dict[str, Dict[int, int]] = {}
+    label_totals: Dict[int, int] = defaultdict(int)
+
+    rows = read_all_list(all_list_path)
+    for row in rows:
+        stem = Path(row.video_pt).stem
+        if stem not in existing_stems:
+            continue
+        d = video_label_counts.setdefault(stem, defaultdict(int))  # type: ignore[assignment]
+        d[int(row.label_id)] += 1  # persons per label in this video
+
+    # defaultdict を通常dictへ（以降の型の扱いを簡単にする）
+    video_label_counts = {stem: dict(cnts) for stem, cnts in video_label_counts.items()}
+
+    if not video_label_counts:
+        print(f"[split] skip: no videos after filtering by existing pt: {dataset_dir}")
+        return
+
+    for cnts in video_label_counts.values():
+        for lid, c in cnts.items():
+            label_totals[int(lid)] += int(c)
+
+    labels = sorted(label_totals.keys())
+    if not labels:
+        print(f"[split] skip: no labels found in all_list after filtering: {all_list_path}")
+        return
+
+    # 重み（レアラベルを少し強める）
+    weights: Dict[int, float] = {lid: 1.0 / max(1, int(label_totals[lid])) for lid in labels}
+
+    # splitごとの目標ラベル数（人物カウント）
+    target_label: Dict[str, Dict[int, float]] = {
+        s: {lid: float(ratios[s]) * float(label_totals[lid]) for lid in labels}
+        for s in ["train", "val", "test"]
+    }
+
+    # splitごとの目標動画数
+    stems_all = sorted(video_label_counts.keys())
+    N = len(stems_all)
+    target_n = _allocate_counts(N, ratios)
+
+    # 動画の並び順：レアラベルを多く含むものを先に割り当てる
+    rng = random.Random(seed)
+    items = list(video_label_counts.items())
+    rng.shuffle(items)
+
+    def rarity_score(counts: Dict[int, int]) -> float:
+        s = 0.0
+        for lid, c in counts.items():
+            s += float(c) * weights.get(int(lid), 0.0)
+        return s
+
+    def person_total(counts: Dict[int, int]) -> int:
+        return int(sum(int(x) for x in counts.values()))
+
+    items.sort(
+        key=lambda kv: (
+            -rarity_score(kv[1]),
+            -person_total(kv[1]),
+            kv[0],
+        )
+    )
+
+    cur_n: Dict[str, int] = {"train": 0, "val": 0, "test": 0}
+    cur_label: Dict[str, Dict[int, int]] = {
+        "train": defaultdict(int),
+        "val": defaultdict(int),
+        "test": defaultdict(int),
+    }  # type: ignore[assignment]
+
+    assigned: Dict[str, List[str]] = {"train": [], "val": [], "test": []}
+
+    def delta_cost(split: str, counts_v: Dict[int, int]) -> float:
+        """
+        split に counts_v を足したときの L1誤差（重み付き）の増分を返す。
+        """
+        d = 0.0
+        cur = cur_label[split]
+        tgt = target_label[split]
+        for lid, c in counts_v.items():
+            lid = int(lid)
+            c = int(c)
+            cur_l = int(cur.get(lid, 0))
+            tgt_l = float(tgt[lid])
+            w = float(weights.get(lid, 1.0))
+            d += w * (abs((cur_l + c) - tgt_l) - abs(cur_l - tgt_l))
+        return d
+
+    for stem, counts_v in items:
+        candidates = [s for s in ["train", "val", "test"] if cur_n[s] < int(target_n[s])]
+        if not candidates:
+            candidates = ["train", "val", "test"]
+
+        scored: List[Tuple[float, int, str]] = []
+        for s in candidates:
+            dc = delta_cost(s, counts_v)
+            remaining = int(target_n[s]) - int(cur_n[s])
+            scored.append((dc, -remaining, s))  # remaining大を優先（-でソート簡略化）
+
+        scored.sort(key=lambda x: (x[0], x[1], x[2]))
+        best_split = scored[0][2]
+
+        assigned[best_split].append(stem)
+        cur_n[best_split] += 1
+        cur = cur_label[best_split]
+        for lid, c in counts_v.items():
+            cur[int(lid)] += int(c)
+
+    splits_dir = dataset_dir / "processed" / "splits"
+
+    def write_list(path: Path, stems: List[str]) -> None:
+        stems = sorted(stems)
+        lines = [f"{stem}.pt 0" for stem in stems]
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+    write_list(splits_dir / "train_list.txt", assigned["train"])
+    write_list(splits_dir / "val_list.txt", assigned["val"])
+    write_list(splits_dir / "test_list.txt", assigned["test"])
+
+    print(
+        f"[split] {dataset_dir.name}: "
+        f"train={len(assigned['train'])}, val={len(assigned['val'])}, test={len(assigned['test'])} "
+        f"(target train={target_n['train']}, val={target_n['val']}, test={target_n['test']})"
+    )
 
 
 def process_all(datasets_root: Path, num_workers: int) -> None:
@@ -273,6 +488,10 @@ def process_all(datasets_root: Path, num_workers: int) -> None:
     with Pool(processes=num_workers) as pool:
         for _ in tqdm(pool.imap_unordered(_worker, jobs), total=len(jobs)):
             pass
+
+    # split list 生成（pt作成後）
+    for ds_dir, all_list_path in all_list_paths.items():
+        build_split_lists(ds_dir, all_list_path)
 
     print("Done.")
 

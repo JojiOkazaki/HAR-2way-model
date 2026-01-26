@@ -14,3 +14,11 @@ DEFAULT_DATASET_NAME = "ucf101"
 DATASET_ROOT = DATASETS_ROOT / DEFAULT_DATASET_NAME
 
 ARTIFACT_ROOT = PROJECT_ROOT / "artifacts"
+
+# 比率は合計が 1.0 になるようにしてください
+TRAIN_RATIO = 0.6
+VAL_RATIO = 0.2
+TEST_RATIO = 0.2
+
+# split 生成の乱数シード（再現性用）
+SPLIT_SEED = 42

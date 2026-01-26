@@ -46,8 +46,8 @@ training:
   accum_steps: 3
   max_norm: 5.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
-  patience: 5
-  min_delta: 0.001
+  patience: 50
+  min_delta: 0.0001
   recall_k: 3
   temperature: 0.1 # 大きくするとrecallが伸びる
 
