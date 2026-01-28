@@ -8,8 +8,8 @@ logging:
 data:
   img_pt_dir: processed/pt
   skel_pt_dir: processed/pt
-  train_file_list: processed/splits/train_list.txt
-  val_file_list: processed/splits/val_list.txt
+  train_file_list: processed/splits/split01/train_list.txt
+  val_file_list: processed/splits/split01/val_list.txt
   num_workers: 14
 
 model:

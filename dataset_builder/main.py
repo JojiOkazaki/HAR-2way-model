@@ -525,8 +525,19 @@ def _split_train_val_balanced(
     seed: int,
 ) -> Tuple[List[str], List[str]]:
     """
-    train_pool を train/val に分割する。
-    動画単位の割当で、label（人物カウント）の分布が比率に近くなるようにする。
+    train_pool を train/val に分割する（動画単位）。
+
+    all_list.txt 由来の label（人物カウント）分布が train/val で近くなるように、
+    乱数シードをずらした複数候補を生成し、最良候補を採用する。
+
+    方針:
+      1) train_pool 全体での label 合計（人物カウント）を計算
+      2) train/val の目標 label 合計を比率から計算（train_r と val_r を正規化）
+      3) 候補生成（複数回）:
+           - 動画の順序をランダムにしつつ
+           - 「割り当て後の目標との差（重み付きL1）」が最小になる方へ貪欲に入れる
+      4) 完成した split をスコア化（全クラスの差の大きさ + サイズ誤差）
+      5) スコア最小の候補を返す
     """
     if not train_pool:
         return [], []
@@ -534,96 +545,142 @@ def _split_train_val_balanced(
     ratios_tv = _normalize_train_val_ratios(float(train_r), float(val_r))
     target_n_tv = _allocate_counts_train_val(len(train_pool), ratios_tv)
 
-    # train_pool 側の label 合計（人物カウント）
+    # train_pool 全体の label 合計（人物カウント）
     label_totals_pool: Dict[int, int] = defaultdict(int)
     for stem in train_pool:
-        for lid, c in video_label_counts[stem].items():
+        for lid, c in video_label_counts.get(stem, {}).items():
             label_totals_pool[int(lid)] += int(c)
 
     labels = sorted(label_totals_pool.keys())
-    rng = random.Random(seed)
 
-    # labels が取れないケースは単純にランダム分割
+    # ラベルが取れないなら単純分割
+    rng0 = random.Random(seed)
     if not labels:
         pool = list(train_pool)
-        rng.shuffle(pool)
+        rng0.shuffle(pool)
         train_n = int(target_n_tv["train"])
         return pool[:train_n], pool[train_n:]
 
-    # 重み（レアラベルを少し強める）
-    weights: Dict[int, float] = {lid: 1.0 / max(1, int(label_totals_pool[lid])) for lid in labels}
-
-    # train/val の目標ラベル数（人物カウント）
+    # 目標 label 合計（人物カウント）
     target_label_tv: Dict[str, Dict[int, float]] = {
         s: {lid: float(ratios_tv[s]) * float(label_totals_pool[lid]) for lid in labels}
         for s in ["train", "val"]
     }
 
-    items = [(stem, video_label_counts[stem]) for stem in train_pool]
-    rng.shuffle(items)
+    # レアクラスを強める重み（人物数ベース）
+    weights: Dict[int, float] = {lid: 1.0 / max(1, int(label_totals_pool[lid])) for lid in labels}
 
-    def rarity_score(counts: Dict[int, int]) -> float:
-        ss = 0.0
-        for lid, c in counts.items():
-            ss += float(c) * weights.get(int(lid), 0.0)
-        return ss
+    def score_split(train_stems: List[str], val_stems: List[str]) -> float:
+        # label合計
+        cur_train: Dict[int, int] = defaultdict(int)
+        cur_val: Dict[int, int] = defaultdict(int)
 
-    def person_total(counts: Dict[int, int]) -> int:
-        return int(sum(int(x) for x in counts.values()))
+        for stem in train_stems:
+            for lid, c in video_label_counts[stem].items():
+                cur_train[int(lid)] += int(c)
+        for stem in val_stems:
+            for lid, c in video_label_counts[stem].items():
+                cur_val[int(lid)] += int(c)
 
-    # sort は stable なので、同点の並びは rng.shuffle の順になる
-    items.sort(
-        key=lambda kv: (
-            -rarity_score(kv[1]),
-            -person_total(kv[1]),
-        )
-    )
+        # 目標との差（重み付きL1）
+        dist = 0.0
+        for lid in labels:
+            w = float(weights[lid])
+            dist += w * abs(float(cur_train.get(lid, 0)) - float(target_label_tv["train"][lid]))
+            dist += w * abs(float(cur_val.get(lid, 0)) - float(target_label_tv["val"][lid]))
 
-    cur_n_tv: Dict[str, int] = {"train": 0, "val": 0}
-    cur_label_tv: Dict[str, Dict[int, int]] = {
-        "train": defaultdict(int),
-        "val": defaultdict(int),
-    }  # type: ignore[assignment]
+        # 動画数の目標との差（強めに罰）
+        size_penalty = 0.0
+        size_penalty += 10.0 * abs(len(train_stems) - int(target_n_tv["train"]))
+        size_penalty += 10.0 * abs(len(val_stems) - int(target_n_tv["val"]))
 
-    assigned_tv: Dict[str, List[str]] = {"train": [], "val": []}
+        return dist + size_penalty
 
-    def delta_cost_tv(split: str, counts_v: Dict[int, int]) -> float:
-        """
-        split に counts_v を足したときの L1誤差（重み付き）の増分を返す。
-        """
-        d = 0.0
-        cur = cur_label_tv[split]
-        tgt = target_label_tv[split]
-        for lid, c in counts_v.items():
-            lid = int(lid)
-            c = int(c)
-            cur_l = int(cur.get(lid, 0))
-            tgt_l = float(tgt[lid])
-            w = float(weights.get(lid, 1.0))
-            d += w * (abs((cur_l + c) - tgt_l) - abs(cur_l - tgt_l))
-        return d
+    def build_once(rng: random.Random) -> Tuple[List[str], List[str]]:
+        # 動画ごとの希少度（レアクラスを多く含む動画を先に処理）
+        items = [(stem, video_label_counts[stem]) for stem in train_pool]
+        rng.shuffle(items)
 
-    for stem, counts_v in items:
-        candidates = [s for s in ["train", "val"] if cur_n_tv[s] < int(target_n_tv[s])]
-        if not candidates:
-            candidates = ["train", "val"]
+        def rarity_score(counts: Dict[int, int]) -> float:
+            s = 0.0
+            for lid, c in counts.items():
+                s += float(c) * float(weights.get(int(lid), 0.0))
+            return s
 
-        scored: List[Tuple[float, int, float, str]] = []
-        for s in candidates:
-            dc = delta_cost_tv(s, counts_v)
-            remaining = int(target_n_tv[s]) - int(cur_n_tv[s])
-            scored.append((dc, -remaining, rng.random(), s))  # tie を乱数で崩す
+        def person_total(counts: Dict[int, int]) -> int:
+            return int(sum(int(x) for x in counts.values()))
 
-        scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-        best_split = scored[0][3]
+        items.sort(key=lambda kv: (-rarity_score(kv[1]), -person_total(kv[1])))
 
-        assigned_tv[best_split].append(stem)
-        cur_n_tv[best_split] += 1
-        cur = cur_label_tv[best_split]
-        for lid, c in counts_v.items():
-            cur[int(lid)] += int(c)
+        cur_n = {"train": 0, "val": 0}
+        cur_label = {"train": defaultdict(int), "val": defaultdict(int)}
+        out = {"train": [], "val": []}
 
-    return assigned_tv["train"], assigned_tv["val"]
+        def delta_cost(split: str, counts_v: Dict[int, int]) -> float:
+            # その split に入れた時の「目標との差」の増分（重み付きL1）
+            d = 0.0
+            cur = cur_label[split]
+            tgt = target_label_tv[split]
+            for lid, c in counts_v.items():
+                lid = int(lid)
+                c = int(c)
+                cur_l = int(cur.get(lid, 0))
+                tgt_l = float(tgt[lid])
+                w = float(weights.get(lid, 1.0))
+                d += w * (abs((cur_l + c) - tgt_l) - abs(cur_l - tgt_l))
+            return d
+
+        for stem, counts_v in items:
+            # まず動画数の上限を守る
+            candidates = [s for s in ["train", "val"] if cur_n[s] < int(target_n_tv[s])]
+            if not candidates:
+                candidates = ["train", "val"]
+
+            # コストが小さい方へ入れる（同点は乱数で崩す）
+            scored = []
+            for s in candidates:
+                dc = delta_cost(s, counts_v)
+                remaining = int(target_n_tv[s]) - int(cur_n[s])
+                scored.append((dc, -remaining, rng.random(), s))
+            scored.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+            chosen = scored[0][3]
+
+            out[chosen].append(stem)
+            cur_n[chosen] += 1
+            for lid, c in counts_v.items():
+                cur_label[chosen][int(lid)] += int(c)
+
+        return out["train"], out["val"]
+
+    # ここが改善点：複数回試して最良を採用
+    # 試行回数は環境変数/設定で変えられるようにしてもよいが、まず固定値で。
+    tries = int(globals().get("SPLIT_TRIES", 64))
+
+    best_train: List[str] = []
+    best_val: List[str] = []
+    best_score: float | None = None
+
+    # seed から派生させて再現性を保つ
+    base = random.Random(seed)
+    seeds = [base.randint(0, 2**31 - 1) for _ in range(max(1, tries))]
+
+    for s in seeds:
+        rng = random.Random(int(s))
+        tr, va = build_once(rng)
+        sc = score_split(tr, va)
+        if best_score is None or sc < best_score:
+            best_score = sc
+            best_train, best_val = tr, va
+
+    # 念のためサイズが崩れていたら補正（基本はここに来ない想定）
+    # ただし、何らかの理由で候補生成時に目標数を守れなかった場合の保険。
+    if len(best_train) + len(best_val) != len(train_pool):
+        pool = list(train_pool)
+        rng0.shuffle(pool)
+        train_n = int(target_n_tv["train"])
+        best_train, best_val = pool[:train_n], pool[train_n:]
+
+    return best_train, best_val
 
 
 def build_split_lists(
