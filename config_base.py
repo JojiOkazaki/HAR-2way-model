@@ -1,3 +1,4 @@
+
 # config_base.py
 from pathlib import Path
 
@@ -22,3 +23,9 @@ TEST_RATIO = 0.2
 
 # split 生成の乱数シード（再現性用）
 SPLIT_SEED = 42
+
+# groupバランスを無効にしたい場合
+ENABLE_GROUP_BALANCE = True
+
+# groupバランスの強さ（大きいほど group 偏りを強く抑える）
+GROUP_BALANCE_ALPHA = 5.0

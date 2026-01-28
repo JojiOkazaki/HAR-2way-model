@@ -10,59 +10,113 @@
 - データセット分割: 生成された全データから、train/val/testデータのファイルリストを自動生成する。
 
 # 環境構築
-本モジュールはAnaconda環境での動作を想定している。
-`dataset_builder/environment.yml`を用いて、全依存ライブラリを一括でインストールできる。
+本モジュールはAnaconda環境での動作を想定している。`dataset_builder/environment.yml`を用いて依存ライブラリを一括インストールする。
 
-```
+```bash
 conda env create -f dataset_builder/environment.yml
 conda activate har-2way-model-dataset-builder
 ```
 
-また、実行時は以下のように実行する。
+実行はリポジトリルート(`HAR-2way-model/`)で以下の通りである。
 
-```
+```bash
 python -m dataset_builder.main
 ```
 
+実行時に参照するデータセットルートは、`config_base.py` / `config_local.py` に定義する次のいずれかで決まる(優先順)。
+
+- `DATASETS_ROOT`
+- `DATASET_ROOT`
+- `RAW_DATA_ROOT`
+
+例(`HAR-2way-model/datasets/` をルートとして使う場合): 
+
+```python
+# config_local.py(例)
+DATASETS_ROOT = r"D:\datas\HAR-2way-model\datasets"
+```
 
 # データディレクトリ構造
-生の動画ファイル、骨格推定結果ファイル、アノテーションファイルが含まれる複数のデータセットは、以下の構造であることを前提とする。
-各ファイル(動画、JSON)のファイル名(stem)は一致している必要がある。
+データセットは`DATASETS_ROOT`配下に複数置ける構造を前提とする。
+各データセットは `raw/`(入力)と `processed/`(生成物)を持つ。
+また、UCF101の公式splitファイル(trainlist/testlist)は`raw/`の外に別管理する。
 
 ```
-.
-├─ katorilab/               # データセット名
-│  ├─ processed/            # 自動生成されるディレクトリ
-│  │  ├─ pt/                # 生成された .pt ファイル
-│  │  │  ├─ 20250802_100426.pt
-│  │  │  └─ ...
-│  │  └─ splits/            # 生成されたリストファイル
-│  │     └─ all_list.txt
-│  └─ raw/                  # 入力データ
-│     ├─ annotations/       # アノテーションJSON
-│     │  ├─ 20250802_100426.json
-│     │  └─ ...
-│     ├─ keypoints/         # 骨格推定JSON (YOLOv8 Pose等)
-│     │  ├─ 20250802_094407.json
-│     │  └─ ...
-│     └─ videos/            # 動画ファイル (.mp4 / .avi)
-│        ├─ 20250802_094407.mp4
-│        └─ ...
-└─ ucf101/
-   └─ ...
+HAR-2way-model/
+└─ datasets/                       # DATASETS_ROOT(複数データセットの親)
+   ├─ katorilab/                   # データセット名
+   │  ├─ raw/                      # 入力データ
+   │  │  ├─ videos/                # 動画ファイル (.mp4 / .avi)
+   │  │  ├─ keypoints/             # 骨格推定JSON (YOLOv8 Pose等)
+   │  │  └─ annotations/           # アノテーションJSON
+   │  └─ processed/                # 自動生成されるディレクトリ
+   │     ├─ pt/                    # 生成された .pt ファイル
+   │     └─ splits/                # 分割リスト置き場
+   │        ├─ all_list.txt         # 全人物行の一覧(共通インデックス)
+   │        └─ default/             # サブスプリット名(katorilabは通常 default)
+   │           ├─ train_list.txt
+   │           ├─ val_list.txt
+   │           └─ test_list.txt
+   │
+   └─ ucf101/
+      ├─ raw/
+      │  ├─ videos/
+      │  ├─ keypoints/
+      │  └─ annotations/
+      ├─ processed/
+      │  ├─ pt/
+      │  └─ splits/
+      │     ├─ all_list.txt         # 全人物行の一覧(共通インデックス)
+      │     ├─ split01/             # サブスプリット(split01/02/03 等)
+      │     │  ├─ train_list.txt
+      │     │  ├─ val_list.txt
+      │     │  └─ test_list.txt
+      │     ├─ split02/
+      │     │  ├─ train_list.txt
+      │     │  ├─ val_list.txt
+      │     │  └─ test_list.txt
+      │     └─ split03/
+      │        ├─ train_list.txt
+      │        ├─ val_list.txt
+      │        └─ test_list.txt
+      └─ original_splits/           # UCF101公式の分割ファイル(rawの外)
+         ├─ split01/
+         │  ├─ trainlist01.txt
+         │  └─ testlist01.txt
+         ├─ split02/
+         │  ├─ trainlist02.txt
+         │  └─ testlist02.txt
+         └─ split03/
+            ├─ trainlist03.txt
+            └─ testlist03.txt
 ```
+
+備考: 
+
+- `raw/` 配下の各ファイル(動画・JSON)はファイル名(stem)が一致している必要がある。
+- `processed/pt/` は `.pt` の生成物であり、複数のサブスプリットで共通に使う。
+- `processed/splits/` は `all_list.txt`(共通)と、サブスプリットごとの `train/val/test_list.txt` を保持する。
 
 # 設定
-データセット生成のパラメータは`dataset_builder/config.py`にて定義されている。
-必要に応じて以下の値を変更する。
+設定は用途により2か所に分かれる。
 
-- `SENTENCE_TRANSFORMER_MODEL_NAME`: 文埋め込みに使用するSentenceBERTモデル名(デフォルト: `stsb-xlm-r-multilingual`)。
-- `NUM_WORKERS`: 並列処理を行うワーカープロセス数。
-- `T`: 生成する時系列データのフレーム長(デフォルト: `32`)。
-- `H, W`: 人物領域画像の出力サイズ(デフォルト: `112x112`)。
-- `J`: 骨格キーポイント数(デフォルト: 17点のCOCO形式)。
-- `MIN_FRAMES`: 入力動画またはJSONのフレーム数がこの値未満の場合、データ生成から除外する。
-- `MAX_P`: 1動画あたりに処理する最大人物数。これを超える人物は無視される。
+## 1. データ生成パラメータ(`dataset_builder/config.py`)
+必要に応じて以下を変更する。
+
+- `SENTENCE_TRANSFORMER_MODEL_NAME`: 文埋め込みに使用するSentenceBERTモデル名
+- `NUM_WORKERS`: 並列処理を行うワーカープロセス数
+- `T`: 生成する時系列データのフレーム長
+- `H, W`: 人物領域画像の出力サイズ
+- `J`: 骨格キーポイント数
+- `MIN_FRAMES`: 入力動画またはJSONのフレーム数がこの値未満の場合、生成から除外
+- `MAX_P`: 1動画あたりに処理する最大人物数
+
+## 2. データセットルート／分割比率(`config_base.py` / `config_local.py`)
+データセットの配置場所と、分割リスト生成の比率(train/val/test)などは `config_base.py`(必要なら `config_local.py` で上書き)で定義する。
+
+- データセットルート(優先順): `DATASETS_ROOT` → `DATASET_ROOT` → `RAW_DATA_ROOT`
+- 分割比率: `TRAIN_RATIO`, `VAL_RATIO`, `TEST_RATIO`
+- 乱数seed: `SPLIT_SEED`
 
 # 出力データ形式
 生成される`.pt`ファイルは、以下のキーを持つ辞書オブジェクトである。
@@ -135,9 +189,37 @@ YOLOv8 Pose等の出力を想定しており、フレームごとの人物リス
   ]
 }
 ```
+# スプリットファイルの形式と運用
+## 1. `processed/splits/all_list.txt`
+全データから作る共通インデックス。各行は人物単位である。
 
+- 形式: `<stem>.pt <person_id> <label_id>`
 
+例: 
 
+```
+v_ApplyEyeMakeup_g01_c01.pt 1 0
+v_ApplyEyeMakeup_g01_c01.pt 2 0
+```
 
+## 2. `processed/splits/<サブスプリット>/{train,val,test}_list.txt`
+学習時に参照する動画(pt)単位のリストである。
 
+- 形式(2列): `<stem>.pt 0`
 
+例: 
+
+```
+v_ApplyEyeMakeup_g01_c01.pt 0
+v_ApplyEyeMakeup_g01_c02.pt 0
+```
+
+※ 2列目は現在 `0` 固定で出力している(学習側のリスト仕様に合わせるため)。
+
+## 3. UCF101公式 split(`original_splits/`)
+UCF101公式の train/test リストは形式が異なるため、生成物(`processed/splits/`)とは分離して保管する。
+
+- `trainlistXX.txt`: `<ClassName>/<video>.avi <label>`(ラベルは 1-based)
+- `testlistXX.txt`: `<ClassName>/<video>.avi`(ラベル列なし)
+
+これらを元に、実際に存在する `.pt` に対応付けた `processed/splits/split01/` 等の `train/val/test_list.txt` を作成して運用する。
