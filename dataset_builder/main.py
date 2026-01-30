@@ -751,7 +751,19 @@ def build_split_lists(
     splits_dir = dataset_dir / "processed" / "splits" / subsplit_name
 
     def write_list(path: Path, stems: List[str]) -> None:
-        stems = sorted(stems)
+        stems = list(stems)
+
+        # train/val だけ並び順をランダム化（再現性あり）
+        if path.name == "train_list.txt":
+            rng = random.Random(seed + 0)
+            rng.shuffle(stems)
+        elif path.name == "val_list.txt":
+            rng = random.Random(seed + 1)
+            rng.shuffle(stems)
+        else:
+            # test は従来どおり名前順にしておく（必要ならここも shuffle に変更可）
+            stems.sort()
+
         lines = [f"{stem}.pt 0" for stem in stems]
         path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
