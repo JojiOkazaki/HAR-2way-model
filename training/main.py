@@ -529,10 +529,10 @@ def train(config: dict) -> None:
             "v_loss_main": val_losses["main"],
             "t_loss_full": train_losses["full"],
             "v_loss_full": val_losses["full"],
-            "t_loss_img": train_losses["img"],
-            "v_loss_img": val_losses["img"],
-            "t_loss_skel": train_losses["skel"],
-            "v_loss_skel": val_losses["skel"],
+            "t_acc_img": train_accs["img"],
+            "v_acc_img": val_accs["img"],
+            "t_acc_skel": train_accs["skel"],
+            "v_acc_skel": val_accs["skel"],
         }
         prev = prev_metrics or {}
 
@@ -544,10 +544,10 @@ def train(config: dict) -> None:
             f"{fmt_colored(cur_metrics['v_loss_main'], prev.get('v_loss_main'), False)} | "
             f"full:{fmt_colored(cur_metrics['t_loss_full'], prev.get('t_loss_full'), False)}/"
             f"{fmt_colored(cur_metrics['v_loss_full'], prev.get('v_loss_full'), False)} | "
-            f"img:{fmt_colored(cur_metrics['t_loss_img'], prev.get('t_loss_img'), False)}/"
-            f"{fmt_colored(cur_metrics['v_loss_img'], prev.get('v_loss_img'), False)} | "
-            f"skel:{fmt_colored(cur_metrics['t_loss_skel'], prev.get('t_loss_skel'), False)}/"
-            f"{fmt_colored(cur_metrics['v_loss_skel'], prev.get('v_loss_skel'), False)}"
+            f"img:{fmt_colored(cur_metrics['t_acc_img'], prev.get('t_acc_img'), True)}/"
+            f"{fmt_colored(cur_metrics['v_acc_img'], prev.get('v_acc_img'), True)} | "
+            f"skel:{fmt_colored(cur_metrics['t_acc_skel'], prev.get('t_acc_skel'), True)}/"
+            f"{fmt_colored(cur_metrics['v_acc_skel'], prev.get('v_acc_skel'), True)}"
         )
 
         prev_metrics = cur_metrics
