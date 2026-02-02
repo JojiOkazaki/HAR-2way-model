@@ -26,13 +26,19 @@ class CNN(nn.Module):
                 max_pool_2d=max_pool_2d
             ))
 
-        self.conv = nn.Sequential(*conv_blocks)
+        self.conv = nn.Sequential(
+            *conv_blocks,
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
         
+        flatten_dim = int(conv_channels[-1])
+        '''
         # flatten形状の自動計算
         with torch.no_grad():
             dummy = torch.zeros(1, conv_channels[0], *input_size)
             h = self.conv(dummy)
             flatten_dim = h.flatten(1).size(1)
+        '''
 
         # 全結合層
         fc_blocks = []

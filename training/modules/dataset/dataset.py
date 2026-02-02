@@ -84,19 +84,33 @@ def pad_person_collate(batch):
 
     batch:
       [(frames, keypoints, scores, labels), ...]
+      または
+      [(frames, keypoints, scores, labels, label_ids), ...]
+
     それぞれ:
       frames    : (P,T,C,H,W)
       keypoints : (P,T,J,2)
       scores    : (P,T,J)
       labels    : (P,D)
+      label_ids : (P,)  # int（同一ラベル判定用。無い場合は -1）
 
     returns:
       frames    : (B,Pmax,T,C,H,W)
       keypoints : (B,Pmax,T,J,2)
       scores    : (B,Pmax,T,J)
       labels    : (B,Pmax,D)
+      label_ids : (B,Pmax)  # 返せる場合のみ
     """
-    frames_list, keypoints_list, scores_list, labels_list = zip(*batch)
+    if len(batch) == 0:
+        raise ValueError("empty batch")
+
+    if len(batch[0]) == 4:
+        frames_list, keypoints_list, scores_list, labels_list = zip(*batch)
+        label_ids_list = None
+    elif len(batch[0]) == 5:
+        frames_list, keypoints_list, scores_list, labels_list, label_ids_list = zip(*batch)
+    else:
+        raise ValueError(f"unexpected sample tuple length: {len(batch[0])}")
 
     B = len(frames_list)
     P_max = max(int(x.shape[0]) for x in frames_list) if B > 0 else 0
@@ -111,6 +125,10 @@ def pad_person_collate(batch):
     scores_out = torch.zeros((B, P_max, T, J), dtype=scores_list[0].dtype)
     labels_out = torch.zeros((B, P_max, D), dtype=labels_list[0].dtype)
 
+    label_ids_out = None
+    if label_ids_list is not None:
+        label_ids_out = torch.full((B, P_max), -1, dtype=torch.long)
+
     for i in range(B):
         P = int(frames_list[i].shape[0])
         if P == 0:
@@ -119,9 +137,12 @@ def pad_person_collate(batch):
         keypoints_out[i, :P] = keypoints_list[i]
         scores_out[i, :P] = scores_list[i]
         labels_out[i, :P] = labels_list[i]
+        if label_ids_out is not None:
+            label_ids_out[i, :P] = label_ids_list[i]
 
-    return frames_out, keypoints_out, scores_out, labels_out
-
+    if label_ids_out is None:
+        return frames_out, keypoints_out, scores_out, labels_out
+    return frames_out, keypoints_out, scores_out, labels_out, label_ids_out
 
 class SyncedDataset(Dataset):
     def __init__(self, img_torch_path, skel_torch_path, file_list=None, img_augment=None):
@@ -165,6 +186,7 @@ class SyncedDataset(Dataset):
             keypoints = data["skeletons"]   # (P,T,J,2)
             scores = data["scores"]         # (P,T,J)
             labels = data["labels"]         # (P,D)
+            label_ids_raw = data.get("label_ids", None)  # list[int] or None
         else:
             # 旧形式（image_branch/skeleton_branch が別pt）の互換
             labelname = img_path.parent.name
@@ -180,6 +202,7 @@ class SyncedDataset(Dataset):
             keypoints = skel_data["skeletons"]
             scores = skel_data["scores"]
             labels = img_data["labels"]
+            label_ids_raw = img_data.get("label_ids", None)
 
         # images: uint8(0..255) -> float(0..1)
         if frames.dtype == torch.uint8:
@@ -193,7 +216,17 @@ class SyncedDataset(Dataset):
         scores = scores.float()
         labels = labels.float()
 
+        P = int(frames.shape[0])
+        if label_ids_raw is None:
+            label_ids = torch.full((P,), -1, dtype=torch.long)
+        else:
+            label_ids = torch.as_tensor(label_ids_raw, dtype=torch.long)
+            if int(label_ids.numel()) != P:
+                raise ValueError(
+                    f"label_ids length mismatch: got {int(label_ids.numel())} but P={P} ({img_path})"
+                )
+
         if self.img_augment is not None:
             frames = self.img_augment(frames)
 
-        return frames, keypoints, scores, labels
+        return frames, keypoints, scores, labels, label_ids

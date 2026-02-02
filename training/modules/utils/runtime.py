@@ -24,3 +24,11 @@ def setup_runtime(seed):
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+def format_hhmmss(seconds):
+    if seconds < 0:
+        raise ValueError("seconds must be non-negative")
+    total = int(seconds)  # 小数は切り捨て（丸めたいなら round(seconds) に変更）
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"

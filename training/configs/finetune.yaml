@@ -6,20 +6,16 @@ logging:
   graph_size: [6, 4]
 
 dataset:
-  name: ucf101
+  name: katorilab
 
 data:
   processed_dir: processed_112_32
-  split: split01
+  split: default
   # img_pt_dir: processed_112_32/pt
   # skel_pt_dir: processed_112_32/pt
   # train_file_list: processed_112_32/splits/default/train_list.txt
   # val_file_list: processed_112_32/splits/default/val_list.txt
   num_workers: 16
-
-weighted_sampler:
-  enabled: true
-  alpha: 1.0
 
 model:
   architecture:
@@ -50,35 +46,26 @@ model:
   loss_weights: [1.0, 1.0, 1.0]
 
 training:
-  batch_size: 16
+  batch_size: 6
   epochs: 120
   accum_steps: 1
   max_norm: 5.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
-  patience: 5
-  min_delta: 0.005
+  patience: 10
+  min_delta: 0.001
   recall_k: 1
-  
-  # proto_ce で学習（(A)）
-  loss_mode: proto_ce
-
-  # proto作成用の走査バッチ（VRAM節約で train batch と分けたい場合）
-  prototype_batch_size: 64
-
-  # valid人物判定（Trainer側で使う）
-  min_valid_t: 16
-
-  # unknown扱いしたい label_id（例: 999 を学習対象から外す）
-  unknown_label_ids: [999]
-
-  # proto_ce でも温度は使う（logitsのスケーリング）
-  temperature: 0.07
+  temperature: 0.2 # 大きくするとrecallが伸びる
 
 optimizer:
   lr: 0.0001 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)
-  weight_decay: 0.02
+  weight_decay: 0.01
   warmup_epochs: 1 # 学習の立ち上がりを遅くすることで序盤を安定させる。小さいと立ち上がりが速くなる。
-  min_lr_ratio: 0.1 # 学習後半で学習率を小さくすることで振動を安定させる。小さいと最終学習率が小さくなる。
+  min_lr_ratio: 0.5 # 学習後半で学習率を小さくすることで振動を安定させる。小さいと最終学習率が小さくなる。
 
 runtime:
   device: cuda
+
+finetune:
+  init_checkpoint: runs/20260201183125/20260201183125_best_model.pt
+  strict: true
+  freeze_prefixes: []   # 例: ["image_branch.cnn", "skeleton_branch"] など
