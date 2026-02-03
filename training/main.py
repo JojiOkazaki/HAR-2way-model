@@ -320,10 +320,10 @@ def train(config: dict) -> None:
     device = torch.device(config["runtime"]["device"])
 
     # preprocess（必要なら有効化）
-    # img_aug = None
-    # img_aug_cfg = (config.get("preprocess", {}) or {}).get("img_aug", None)
-    # if isinstance(img_aug_cfg, dict):
-    #     img_aug = ImageOnlyAugment(**img_aug_cfg)
+    img_aug = None
+    img_aug_cfg = (config.get("preprocess", {}) or {}).get("img_aug", None)
+    if isinstance(img_aug_cfg, dict):
+        img_aug = ImageOnlyAugment(**img_aug_cfg)
 
     # logger
     head_keys = ["full", "img", "skel"]

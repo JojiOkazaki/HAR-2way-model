@@ -25,9 +25,9 @@ model:
   architecture:
     img:
       cnn:
-        conv_channels: [3, 16, 32, 64]
+        conv_channels: [3, 32, 64, 128, 128, 128]
         fc_layers: [128]
-        dropouts: [0.0, 0.2, 0.3]
+        dropouts: [0.0, 0.1, 0.2, 0.3, 0.4]
         input_size: [112, 112]
       transformer:
         d_model: 128
@@ -35,12 +35,12 @@ model:
         num_layers: 2
         dim_ff: 256
         max_len: 32
-        dropout: 0.3
+        dropout: 0.5
 
     skel:
       stgcn:
-        channels: [3, 16, 32, 64, 128]
-        dropouts: [0.0, 0.0, 0.1, 0.2]
+        channels: [3, 64, 64, 128, 128, 128, 128]
+        dropouts: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
         temporal_kernel_size: 9
 
     mlp:
@@ -50,12 +50,12 @@ model:
   loss_weights: [1.0, 1.0, 1.0]
 
 training:
-  batch_size: 16
+  batch_size: 4
   epochs: 120
   accum_steps: 1
   max_norm: 5.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
-  patience: 5
+  patience: 15
   min_delta: 0.005
   recall_k: 1
   
@@ -76,9 +76,16 @@ training:
 
 optimizer:
   lr: 0.0001 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)
-  weight_decay: 0.02
-  warmup_epochs: 1 # 学習の立ち上がりを遅くすることで序盤を安定させる。小さいと立ち上がりが速くなる。
-  min_lr_ratio: 0.1 # 学習後半で学習率を小さくすることで振動を安定させる。小さいと最終学習率が小さくなる。
+  weight_decay: 0.05
+  warmup_epochs: 3 # 学習の立ち上がりを遅くすることで序盤を安定させる。小さいと立ち上がりが速くなる。
+  min_lr_ratio: 0.01 # 学習後半で学習率を小さくすることで振動を安定させる。小さいと最終学習率が小さくなる。
 
 runtime:
   device: cuda
+
+preprocess:
+  img_aug:
+    p: 0.8              # 適用確率
+    jitter: 0.2         # 色調変化の強さ
+    noise_std: 0.02     # ノイズ
+    p_erasing: 0.3      # RandomErasing(一部隠し)の確率
