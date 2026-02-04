@@ -110,7 +110,9 @@ def create_model(params: dict) -> torch.nn.Module:
             TransformerEncoder(**params["img"]["transformer"]),
         ),
         SkeletonBranch(
-            STGCN(**params["skel"]["stgcn"])
+            STGCN(**params["skel"]["stgcn"]),
+            #config_path="training/configs/stgcn_coco.py",
+            #checkpoint_path=None
         ),
         MLP(**params["mlp"]),
     )

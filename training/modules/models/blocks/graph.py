@@ -65,7 +65,7 @@ class SpatialGraphConvBlock(BaseBlock):
         return self.conv(x)
 
 class STGCNBlock(BaseBlock):
-    def __init__(self, in_dim, out_dim, adj, temporal_kernel_size=9, stride=1, dropout=0.0):
+    def __init__(self, in_dim, out_dim, adj, temporal_kernel_size=9, stride=1, dropout=0.0, norm='batch'):
         super().__init__()
 
         if temporal_kernel_size % 2 == 0:
@@ -73,12 +73,20 @@ class STGCNBlock(BaseBlock):
 
         pad_t = (temporal_kernel_size - 1) // 2
 
-        # 空間畳み込み層
         self.gcn = SpatialGraphConvBlock(in_dim, out_dim, adj)
 
-        # 時間畳み込み層
+        # 正規化層を取得するヘルパー関数
+        def get_norm(channels):
+            if norm == 'batch':
+                return nn.BatchNorm2d(channels)
+            elif norm == 'layer':
+                return ChannelLayerNorm(channels)
+            else:
+                raise ValueError(f"Unknown norm type: {norm}")
+
+        # 時間畳み込み層 (切り替え対応)
         self.tcn = nn.Sequential(
-            ChannelLayerNorm(out_dim),
+            get_norm(out_dim),
             nn.ReLU(inplace=True),
             nn.Conv2d(out_dim, out_dim,
                 kernel_size=(temporal_kernel_size, 1),
@@ -86,7 +94,7 @@ class STGCNBlock(BaseBlock):
                 padding=(pad_t, 0),
                 bias=False,
             ),
-            ChannelLayerNorm(out_dim),
+            get_norm(out_dim),
             self._make_dropout(dropout),
         )
 
@@ -96,14 +104,12 @@ class STGCNBlock(BaseBlock):
         else:
             self.residual = nn.Sequential(
                 nn.Conv2d(in_dim, out_dim, kernel_size=1, stride=(stride, 1), bias=False),
-                ChannelLayerNorm(out_dim),
+                get_norm(out_dim),
             )
 
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        # input shape: (B, in_dim, T, J)
-        # output shape: (B, out_dim, T', J)
         res = self.residual(x)
         x = self.gcn(x)
         x = self.tcn(x)

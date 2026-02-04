@@ -23,5 +23,7 @@ def build_coco17_adj(device=None, dtype=torch.float32):
         j = b - 1
         adj[i, j] = 1.0
         adj[j, i] = 1.0
-
+    
+    adj = adj + torch.eye(K, dtype=dtype, device=device)
+    
     return adj

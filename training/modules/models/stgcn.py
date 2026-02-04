@@ -5,12 +5,10 @@ from training.modules.models.blocks import STGCNBlock
 from training.modules.models.blocks import normalize_dropouts
 
 class STGCN(nn.Module):
-    def __init__(self, channels, adj, temporal_kernel_size=9, dropout=0.0, dropouts=None):
+    def __init__(self, channels, adj, temporal_kernel_size=9, dropout=0.0, dropouts=None, norm='batch'):
         super().__init__()
         
-        # 出力次元数を明示的に書く
         self.out_dim = int(channels[-1])
-
         dropouts = normalize_dropouts(len(channels) - 1, dropout, dropouts)
 
         blocks = []
@@ -22,6 +20,7 @@ class STGCN(nn.Module):
                     temporal_kernel_size=temporal_kernel_size,
                     stride=1,
                     dropout=dropouts[i],
+                    norm=norm  # ここで指定されたnormを渡す
                 )
             )
 

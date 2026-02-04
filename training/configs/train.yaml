@@ -42,6 +42,7 @@ model:
         channels: [3, 64, 64, 128, 128, 128, 128]
         dropouts: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
         temporal_kernel_size: 9
+        norm: layer # batch / layer
 
     mlp:
       layers: [256, 512, 768]
