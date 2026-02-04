@@ -106,7 +106,7 @@ def _freeze_by_prefix(model: torch.nn.Module, cfg: dict) -> None:
 def create_model(params: dict) -> torch.nn.Module:
     return FullModel(
         ImageBranch(
-            CNN(**params["img"]["cnn"]),
+            #CNN(**params["img"]["cnn"]),
             TransformerEncoder(**params["img"]["transformer"]),
         ),
         SkeletonBranch(
