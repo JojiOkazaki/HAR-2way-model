@@ -9,7 +9,7 @@ dataset:
   name: ucf101
 
 data:
-  processed_dir: processed_112_32
+  processed_dir: processed
   split: split01
   # img_pt_dir: processed_112_32/pt
   # skel_pt_dir: processed_112_32/pt

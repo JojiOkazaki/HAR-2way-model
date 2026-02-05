@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
@@ -63,48 +63,91 @@ def _crop_person_image_u8(img_rgb: np.ndarray, bbox_xyxy: List[float], out_size:
     return crop
 
 
-def normalize_skeleton_person_based(kps: np.ndarray, scores: np.ndarray) -> np.ndarray:
+def normalize_skeleton_person_based(
+    kps: np.ndarray,
+    scores: np.ndarray,
+    *,
+    score_thr: float = 0.05,
+    min_scale: float = 1e-3,
+    max_abs_norm: float = 5.0,
+    use_fallback_hip_scale: bool = True,
+    return_ok: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, bool]]:
     """
     COCO17 前提の人物基準正規化:
-      hip_center で平行移動し、肩幅でスケール。
+      - hip_center で平行移動
+      - shoulder 幅（両肩が一定以上の信頼度なら）でスケール
+      - shoulder が使えない場合は hip 間距離でフォールバック（use_fallback_hip_scale=True）
+      - 正規化後の座標が極端（|x| が max_abs_norm を超える等）なら無効扱い
+
     kps:    (J,2) float
     scores: (J,)  float
 
-    returns: (J,2) float32
+    returns:
+      - return_ok=False: (J,2) float32
+      - return_ok=True : ((J,2) float32, ok: bool)
+        ok=False の場合はゼロ配列を返す
     """
     LEFT_HIP = 11
     RIGHT_HIP = 12
     LEFT_SHOULDER = 5
     RIGHT_SHOULDER = 6
 
-    kps = kps.astype(np.float32, copy=False)
-    scores = scores.astype(np.float32, copy=False)
+    def _zeros_like_input() -> np.ndarray:
+        try:
+            return np.zeros_like(kps, dtype=np.float32)
+        except Exception:
+            j = int(scores.shape[0]) if hasattr(scores, "shape") else 0
+            return np.zeros((j, 2), dtype=np.float32)
+
+    kps = np.asarray(kps, dtype=np.float32)
+    scores = np.asarray(scores, dtype=np.float32)
+
+    ok = True
 
     if kps.ndim != 2 or kps.shape[1] != 2 or scores.ndim != 1:
-        return np.zeros_like(kps, dtype=np.float32)
+        ok = False
+    elif kps.shape[0] != scores.shape[0]:
+        ok = False
+    elif kps.shape[0] <= max(LEFT_HIP, RIGHT_HIP, LEFT_SHOULDER, RIGHT_SHOULDER):
+        ok = False
+    elif not np.isfinite(kps).all() or not np.isfinite(scores).all():
+        ok = False
 
-    if kps.shape[0] <= max(LEFT_HIP, RIGHT_HIP, LEFT_SHOULDER, RIGHT_SHOULDER):
-        return np.zeros_like(kps, dtype=np.float32)
+    if not ok:
+        out = _zeros_like_input()
+        return (out, False) if return_ok else out
 
-    if not np.isfinite(kps).all():
-        return np.zeros_like(kps, dtype=np.float32)
-
+    # hip 必須（平行移動の基準）
     if scores[LEFT_HIP] <= 0 or scores[RIGHT_HIP] <= 0:
-        return np.zeros_like(kps, dtype=np.float32)
+        out = _zeros_like_input()
+        return (out, False) if return_ok else out
 
     hip_center = 0.5 * (kps[LEFT_HIP] + kps[RIGHT_HIP])
-    kps = kps - hip_center
+    kps_c = kps - hip_center  # centered
 
-    if scores[LEFT_SHOULDER] > 0 and scores[RIGHT_SHOULDER] > 0:
-        scale = np.linalg.norm(kps[LEFT_SHOULDER] - kps[RIGHT_SHOULDER])
-    else:
-        scale = 1.0
+    # scale candidates
+    shoulder_ok = (scores[LEFT_SHOULDER] >= float(score_thr)) and (scores[RIGHT_SHOULDER] >= float(score_thr))
+    scale: Optional[float] = None
 
-    if (not np.isfinite(scale)) or scale < 1e-6:
-        return np.zeros_like(kps, dtype=np.float32)
+    if shoulder_ok:
+        scale = float(np.linalg.norm(kps_c[LEFT_SHOULDER] - kps_c[RIGHT_SHOULDER]))
 
-    kps = kps / scale
-    return kps.astype(np.float32, copy=False)
+    if (scale is None) and bool(use_fallback_hip_scale):
+        scale = float(np.linalg.norm(kps[LEFT_HIP] - kps[RIGHT_HIP]))
+
+    if (scale is None) or (not np.isfinite(scale)) or (scale < float(min_scale)):
+        out = _zeros_like_input()
+        return (out, False) if return_ok else out
+
+    kps_n = kps_c / float(scale)
+
+    if (not np.isfinite(kps_n).all()) or (float(np.abs(kps_n).max()) > float(max_abs_norm)):
+        out = _zeros_like_input()
+        return (out, False) if return_ok else out
+
+    out = kps_n.astype(np.float32, copy=False)
+    return (out, True) if return_ok else out
 
 
 def generate_video_sample(
@@ -273,9 +316,13 @@ def generate_video_sample(
             except Exception:
                 continue
 
-            sk = normalize_skeleton_person_based(sk, sc)  # (J,2)
-            skel_out[p_idx, t_idx] = sk
-            score_out[p_idx, t_idx] = sc
+            sk_n, ok = normalize_skeleton_person_based(sk, sc, return_ok=True)
+            skel_out[p_idx, t_idx] = sk_n
+
+            if ok:
+                score_out[p_idx, t_idx] = sc
+            else:
+                score_out[p_idx, t_idx] = 0.0
 
     frames_tensor = torch.from_numpy(frames_out).to(dtype=torch.long).contiguous()
     images_tensor = torch.from_numpy(images_out).to(dtype=torch.uint8).contiguous()
