@@ -148,6 +148,14 @@ class AllListRow:
     label_id: int
 
 
+def _get_max_p_candidate() -> int:
+    """
+    1動画あたりの候補人物数（先に多めに拾う上限）。
+    config.MAX_P_CANDIDATE が無ければ config.MAX_P を使う（後方互換）。
+    """
+    return int(getattr(config, "MAX_P_CANDIDATE", getattr(config, "MAX_P", 30)))
+
+
 def build_all_list(dataset_dir: Path) -> Path:
     """
     processed/splits/all_list.txt を自動生成する。
@@ -157,7 +165,9 @@ def build_all_list(dataset_dir: Path) -> Path:
 
     対象 stem は videos/keypoints/annotations が揃っているもののみ。
     katorilab 等の is_error=true は除外。
-    1動画あたり MAX_P を超える人物は除外（annotations配列順で先頭から MAX_P まで）。
+
+    1動画あたり MAX_P_CANDIDATE を超える人物は除外
+    （annotations配列順で先頭から MAX_P_CANDIDATE まで）。
     """
     dataset_dir = _to_path(dataset_dir)
     ensure_processed_dirs(dataset_dir)
@@ -176,7 +186,7 @@ def build_all_list(dataset_dir: Path) -> Path:
 
     common_stems = sorted((set(video_map.keys()) & keypoint_stems & annotation_stems))
 
-    max_p = int(getattr(config, "MAX_P", 30))
+    max_p_candidate = _get_max_p_candidate()
 
     lines: List[str] = []
     for stem in common_stems:
@@ -189,7 +199,7 @@ def build_all_list(dataset_dir: Path) -> Path:
 
         kept = 0
         for rec in ann_list:
-            if kept >= max_p:
+            if kept >= max_p_candidate:
                 break
             if not isinstance(rec, dict):
                 continue
@@ -248,12 +258,12 @@ def build_jobs_from_all_list(dataset_dir: Path, all_list_path: Path) -> List[Tup
         grouped.setdefault(stem, []).append((row.person_id, row.label_id))
 
     min_frames = int(getattr(config, "MIN_FRAMES", 30))
-    max_p = int(getattr(config, "MAX_P", 30))
+    max_p_candidate = _get_max_p_candidate()
 
     jobs: List[Tuple] = []
     for stem, person_label_pairs in grouped.items():
-        # 念のためここでも MAX_P を適用（all_list側で適用済みでも安全）
-        person_label_pairs = person_label_pairs[:max_p]
+        # 念のためここでも候補上限を適用（all_list側で適用済みでも安全）
+        person_label_pairs = person_label_pairs[:max_p_candidate]
 
         jobs.append(
             (
@@ -265,7 +275,7 @@ def build_jobs_from_all_list(dataset_dir: Path, all_list_path: Path) -> List[Tup
                 int(config.W),
                 int(config.H),
                 min_frames,
-                max_p,
+                max_p_candidate,  # write_video_sample 側に「候補数上限」として渡す
             )
         )
     return jobs
@@ -652,8 +662,6 @@ def _split_train_val_balanced(
 
         return out["train"], out["val"]
 
-    # ここが改善点：複数回試して最良を採用
-    # 試行回数は環境変数/設定で変えられるようにしてもよいが、まず固定値で。
     tries = int(globals().get("SPLIT_TRIES", 64))
 
     best_train: List[str] = []
@@ -673,7 +681,6 @@ def _split_train_val_balanced(
             best_train, best_val = tr, va
 
     # 念のためサイズが崩れていたら補正（基本はここに来ない想定）
-    # ただし、何らかの理由で候補生成時に目標数を守れなかった場合の保険。
     if len(best_train) + len(best_val) != len(train_pool):
         pool = list(train_pool)
         rng0.shuffle(pool)
@@ -995,12 +1002,16 @@ def process_all(datasets_root: Path, num_workers: int) -> None:
     for ds_dir, all_list_path in all_list_paths.items():
         jobs.extend(build_jobs_from_all_list(ds_dir, all_list_path))
 
+    max_p_candidate = _get_max_p_candidate()
+    max_p_out = int(getattr(config, "MAX_P", max_p_candidate))
+
     print(f"Datasets: {len(dataset_dirs)}")
     print(f"Total videos (jobs): {len(jobs)}")
     print(
         f"Using {num_workers} workers, "
         f"T={config.T}, J={config.J}, W={config.W}, H={config.H}, "
-        f"MIN_FRAMES={getattr(config, 'MIN_FRAMES', 30)}, MAX_P={getattr(config, 'MAX_P', 30)}"
+        f"MIN_FRAMES={getattr(config, 'MIN_FRAMES', 30)}, "
+        f"MAX_P_CANDIDATE={max_p_candidate}, MAX_P={max_p_out}"
     )
 
     if not jobs:

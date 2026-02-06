@@ -138,7 +138,7 @@ def write_video_sample(
     W: int,
     H: int,
     MIN_FRAMES: int,
-    MAX_P: int,
+    MAX_P_CANDIDATE: int,
 ) -> bool:
     """
     1動画につき1ファイル（単一pt）を作成する。
@@ -189,8 +189,16 @@ def write_video_sample(
     if not person_label_pairs:
         return False
 
-    # MAX_P 適用（all_list 出現順）
-    person_label_pairs = person_label_pairs[: int(MAX_P)]
+    # 候補人数上限（出現順）: ここでは「候補」を多めに保持し、後段で“主人物優先”で絞る
+    max_p_candidate = int(MAX_P_CANDIDATE)
+    if max_p_candidate <= 0:
+        return False
+    person_label_pairs = person_label_pairs[:max_p_candidate]
+
+    # 最終的に保存する P（学習に使う P 上限）
+    max_p_out = int(getattr(config, "MAX_P", 3))
+    if max_p_out <= 0:
+        return False
 
     person_ids: List[int] = [int(pid) for pid, _ in person_label_pairs]
     label_ids: List[int] = [int(lid) for _, lid in person_label_pairs]
@@ -206,7 +214,7 @@ def write_video_sample(
     emb_list = [_get_sentence_embedding(s) for s in label_sentences]
     labels = torch.stack(emb_list, dim=0).contiguous()  # (P,D) float32 CPU
 
-    # データ生成
+    # データ生成（候補人物ぶん生成）
     frames, images, skeletons, scores = generate_video_sample(
         video_path=video_path,
         json_data=json_data,
@@ -217,34 +225,52 @@ def write_video_sample(
         H=int(H),
     )
 
+    # 有効フレーム数（人物ごと）
     person_has_keypoint = scores.max(dim=-1).values > 0  # (P,T)
     valid_len = person_has_keypoint.sum(dim=-1)          # (P,)
 
-    keep = (valid_len >= config.MIN_VALID_T)
+    keep = (valid_len >= int(getattr(config, "MIN_VALID_T", 16)))
 
     # 全部落ちたらこの動画は捨てる（ptを作らない）
     if int(keep.sum().item()) == 0:
         return False
-    
-    keep_cpu = keep.detach().cpu()
 
-    frames = frames[keep]
-    images = images[keep]
-    skeletons = skeletons[keep]
-    scores = scores[keep]
-    labels = labels[keep]
+    keep_idx = keep.nonzero(as_tuple=False).squeeze(1)  # (K,)
 
-    # listも同じkeepで落とす
-    keep_list = keep_cpu.tolist()
-    person_ids = [pid for pid, k in zip(person_ids, keep_list) if k]
-    label_ids = [lid for lid, k in zip(label_ids, keep_list) if k]
-    label_sentences = [s for s, k in zip(label_sentences, keep_list) if k]
+    # “主人物”優先で上位Pを選ぶ:
+    #  1) valid_len が大きいほど優先
+    #  2) 同程度なら平均 score が高いほど優先
+    scores_kept = scores.index_select(0, keep_idx)  # (K,T,J)
+    mean_score = scores_kept.mean(dim=(1, 2))       # (K,)
+    valid_kept = valid_len.index_select(0, keep_idx).to(mean_score.dtype)  # (K,)
+
+    composite = valid_kept * 1000.0 + mean_score  # valid_len を主にする
+    k_out = min(int(max_p_out), int(keep_idx.numel()))
+    if k_out <= 0:
+        return False
+
+    top_in_kept = torch.topk(composite, k=k_out, largest=True, sorted=True).indices  # (k_out,)
+    select_idx = keep_idx.index_select(0, top_in_kept)  # (k_out,)
+
+    # Tensor を選別（同じインデックスで揃える）
+    frames = frames.index_select(0, select_idx)
+    images = images.index_select(0, select_idx)
+    skeletons = skeletons.index_select(0, select_idx)
+    scores = scores.index_select(0, select_idx)
+    labels = labels.index_select(0, select_idx)
+
+    # list も同じインデックスで揃える
+    sel = [int(i) for i in select_idx.tolist()]
+    person_ids = [person_ids[i] for i in sel]
+    label_ids = [label_ids[i] for i in sel]
+    label_sentences = [label_sentences[i] for i in sel]
 
     # dtype/CPU/contiguous を保証
     frames = frames.detach().cpu().to(torch.long).contiguous()              # (P,T)
     images = images.detach().cpu().to(torch.uint8).contiguous()             # (P,T,3,H,W)
     skeletons = skeletons.detach().cpu().to(torch.float32).contiguous()     # (P,T,J,2)
     scores = scores.detach().cpu().to(torch.float32).contiguous()           # (P,T,J)
+    labels = labels.detach().cpu().to(torch.float32).contiguous()           # (P,D)
 
     torch.save(
         {
