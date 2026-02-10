@@ -21,7 +21,7 @@ from training.modules.utils import build_coco17_adj
 from training.modules.utils import EarlyStopper
 
 # __init__.py を変更しないため明示import
-from training.modules.dataset.dataset import SyncedDataset, ImageOnlyAugment, pad_person_collate
+from training.modules.dataset.dataset import SyncedDataset, ImageOnlyAugment, SkeletonAugment, pad_person_collate
 
 from config_base import *
 
@@ -161,6 +161,7 @@ def create_loader(
     num_workers: int,
     is_train: bool = True,
     img_aug=None,
+    skel_aug=None,
     sampler=None,
 ) -> DataLoader:
     persistent = bool(num_workers and int(num_workers) > 0)
@@ -170,6 +171,7 @@ def create_loader(
             skeleton_dir,
             file_list=file_list,
             img_augment=img_aug if is_train else None,
+            skel_augment=skel_aug if is_train else None,
         ),
         batch_size=batch_size,
         shuffle=(is_train and sampler is None),
@@ -332,6 +334,11 @@ def train(config: dict) -> None:
     if isinstance(img_aug_cfg, dict):
         img_aug = ImageOnlyAugment(**img_aug_cfg)
 
+    skel_aug = None
+    skel_aug_cfg = (config.get("preprocess", {}) or {}).get("skel_aug", None)
+    if isinstance(skel_aug_cfg, dict):
+        skel_aug = SkeletonAugment(**skel_aug_cfg)
+
     # logger
     head_keys = ["full", "img", "skel"]
     csv_headers = (
@@ -363,7 +370,8 @@ def train(config: dict) -> None:
         batch_size, num_workers,
         is_train=True,
         sampler=sampler,
-        # img_aug=img_aug
+        img_aug=img_aug,
+        skel_aug=skel_aug
     )
     val_loader = create_loader(
         img_pt_dir, skel_pt_dir, val_file_list,
@@ -392,6 +400,7 @@ def train(config: dict) -> None:
             is_train=False,
             sampler=None,
             img_aug=None,
+            skel_aug=None,
         )
 
         class_protos_cpu, label_id_list, lid_to_cidx = build_class_prototypes_from_pt_labels(

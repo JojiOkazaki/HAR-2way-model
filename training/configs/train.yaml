@@ -53,8 +53,8 @@ model:
 
 training:
   batch_size: 4
-  epochs: 60
-  accum_steps: 4
+  epochs: 120
+  accum_steps: 16
   max_norm: 1.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
   patience: 15
@@ -91,3 +91,9 @@ preprocess:
     jitter: 0.2         # 色調変化の強さ
     noise_std: 0.02     # ノイズ
     p_erasing: 0.3      # RandomErasing(一部隠し)の確率
+  
+  skel_aug:
+    p: 0.5
+    theta: 15
+    scale: [0.9, 1.1]
+    shift: 0.05

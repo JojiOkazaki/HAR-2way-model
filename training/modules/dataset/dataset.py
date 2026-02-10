@@ -1,4 +1,5 @@
 import torch
+import math
 from pathlib import Path
 from torch.utils.data import Dataset
 import torchvision.transforms.functional as TF
@@ -69,6 +70,54 @@ class ImageOnlyAugment:
 
         return x.reshape(*lead, C, H, W)
 
+class SkeletonAugment:
+    def __init__(self, p=0.5, theta=15, scale=(0.9, 1.1), shift=0.05):
+        self.p = p
+        self.theta = theta  # 回転角度（度）
+        self.scale = scale  # スケール範囲
+        self.shift = shift  # 平行移動範囲
+
+    def __call__(self, keypoints):
+        # keypoints: (P, T, J, 2)
+        if torch.rand(1).item() > self.p:
+            return keypoints
+
+        device = keypoints.device
+        P, T, J, C = keypoints.shape
+        
+        # 1. Rotation
+        if self.theta > 0:
+            angle = (torch.rand(1).item() * 2 - 1) * self.theta
+            rad = math.radians(angle)
+            cos_r = math.cos(rad)
+            sin_r = math.sin(rad)
+            
+            # 回転中心（ここでは0.5, 0.5を中心と仮定、またはデータの重心を使う方法もあり）
+            center_x, center_y = 0.5, 0.5
+            
+            x = keypoints[..., 0] - center_x
+            y = keypoints[..., 1] - center_y
+            
+            new_x = x * cos_r - y * sin_r + center_x
+            new_y = x * sin_r + y * cos_r + center_y
+            
+            keypoints = torch.stack([new_x, new_y], dim=-1)
+
+        # 2. Scaling
+        if self.scale:
+            s = torch.rand(1).item() * (self.scale[1] - self.scale[0]) + self.scale[0]
+            # 中心を基準にスケーリング
+            center = 0.5
+            keypoints = (keypoints - center) * s + center
+
+        # 3. Shifting (Translation)
+        if self.shift > 0:
+            dx = (torch.rand(1).item() * 2 - 1) * self.shift
+            dy = (torch.rand(1).item() * 2 - 1) * self.shift
+            keypoints[..., 0] += dx
+            keypoints[..., 1] += dy
+
+        return keypoints.clamp(0.0, 1.0)
 
 def _torch_load(path: Path):
     try:
@@ -145,10 +194,11 @@ def pad_person_collate(batch):
     return frames_out, keypoints_out, scores_out, labels_out, label_ids_out
 
 class SyncedDataset(Dataset):
-    def __init__(self, img_torch_path, skel_torch_path, file_list=None, img_augment=None):
+    def __init__(self, img_torch_path, skel_torch_path, file_list=None, img_augment=None, skel_augment=None):
         self.img_torch_path = Path(img_torch_path)
         self.skel_torch_path = Path(skel_torch_path) if skel_torch_path is not None else None
         self.img_augment = img_augment
+        self.skel_augment = skel_augment  # 保存
 
         # 新形式: 単一pt（images/skeletons/scores/labels 同梱）
         self._single_pt = (
@@ -228,5 +278,8 @@ class SyncedDataset(Dataset):
 
         if self.img_augment is not None:
             frames = self.img_augment(frames)
+
+        if self.skel_augment is not None:
+            keypoints = self.skel_augment(keypoints)
 
         return frames, keypoints, scores, labels, label_ids
