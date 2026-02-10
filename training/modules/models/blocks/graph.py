@@ -54,15 +54,51 @@ class GraphBlock(BaseBlock):
 class SpatialGraphConvBlock(BaseBlock):
     def __init__(self, in_dim, out_dim, adj, bias=True):
         super().__init__()
-        A_hat = _normalize_adj(adj)
-        self.register_buffer("A_hat", A_hat)
-        self.conv = nn.Conv2d(in_dim, out_dim, kernel_size=1, bias=bias)
+        
+        # adj: (3, K, K) or (K, K)
+        # 正規化は skeleton.py 側で完了している前提とします。
+        if adj.dim() == 2:
+            # 後方互換性（念のため）
+            adj = adj.unsqueeze(0)
+        
+        # adj をバッファとして登録
+        self.register_buffer("A", adj) # (Kp, K, K)
+        
+        self.num_subsets = adj.size(0) # Kp = 3
+
+        # 重み共有ではなく、パーティションごとに独立した重みを持たせる
+        # 実装テクニック: 出力チャネルを Kp倍 にしたConv2dを使い、あとで分割して和をとる
+        self.conv = nn.Conv2d(in_dim, out_dim * self.num_subsets, kernel_size=1, bias=bias)
 
     def forward(self, x):
-        # input shape: (B, in_dim, T, J)
-        # output shape: (B, out_dim, T, J)
-        x = torch.einsum("bctj,jw->bctw", x, self.A_hat)
-        return self.conv(x)
+        # x: (B, in_dim, T, V)
+        N, C, T, V = x.size()
+        
+        # 1. 独立した重みで変換
+        # out: (B, out_dim * Kp, T, V)
+        x = self.conv(x)
+        
+        # 2. 形状変更 (B, Kp, out_dim, T, V)
+        # channel方向を (Kp, out_dim) に分解
+        x = x.view(N, self.num_subsets, -1, T, V)
+        
+        # 3. グラフ畳み込み (各パーティションのAを適用して和をとる)
+        # x:      (N, Kp, out, T, V)
+        # self.A: (Kp, V, W)   (ここで V=W=ノード数)
+        #
+        # einsum計算:
+        # n: batch
+        # k: kernel size (partitions)
+        # c: out_channels
+        # t: time
+        # v: target node
+        # w: source node
+        #
+        # 出力は (N, c, t, v)
+        
+        x = torch.einsum('nkctw,kvw->nctv', x, self.A)
+        
+        return x.contiguous()
 
 class STGCNBlock(BaseBlock):
     def __init__(self, in_dim, out_dim, adj, temporal_kernel_size=9, stride=1, dropout=0.0, norm='batch'):

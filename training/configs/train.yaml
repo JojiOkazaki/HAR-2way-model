@@ -49,12 +49,12 @@ model:
       layers: [224, 512, 768]
       dropouts: [0.6]
 
-  loss_weights: [1.0, 1.0, 1.0]
+  loss_weights: [0.0, 0.0, 1.0]
 
 training:
   batch_size: 4
-  epochs: 30
-  accum_steps: 1
+  epochs: 60
+  accum_steps: 4
   max_norm: 1.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
   patience: 15
