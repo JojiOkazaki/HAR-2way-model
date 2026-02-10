@@ -226,10 +226,16 @@ def write_video_sample(
     )
 
     # 有効フレーム数（人物ごと）
+    # sample_frame_ids は N<T でフレームID重複が起こり得るため、
+    # 「T上でのカウント」ではなく「ユニークなフレームID数」で判定する。
     person_has_keypoint = scores.max(dim=-1).values > 0  # (P,T)
-    valid_len = person_has_keypoint.sum(dim=-1)          # (P,)
 
-    keep = (valid_len >= int(getattr(config, "MIN_VALID_T", 16)))
+    unique_valid_len = torch.zeros((scores.size(0),), dtype=torch.long)
+    for i in range(int(scores.size(0))):
+        f = frames[i][person_has_keypoint[i]]
+        unique_valid_len[i] = int(torch.unique(f).numel()) if f.numel() > 0 else 0
+
+    keep = unique_valid_len >= int(getattr(config, "MIN_VALID_T", 16))
 
     # 全部落ちたらこの動画は捨てる（ptを作らない）
     if int(keep.sum().item()) == 0:
@@ -241,10 +247,21 @@ def write_video_sample(
     #  1) valid_len が大きいほど優先
     #  2) 同程度なら平均 score が高いほど優先
     scores_kept = scores.index_select(0, keep_idx)  # (K,T,J)
-    mean_score = scores_kept.mean(dim=(1, 2))       # (K,)
-    valid_kept = valid_len.index_select(0, keep_idx).to(mean_score.dtype)  # (K,)
 
-    composite = valid_kept * 1000.0 + mean_score  # valid_len を主にする
+    # 平均scoreは「keypointがあるフレームのみ」で算出（ゼロ埋めの影響を減らす）
+    person_has_keypoint_kept = person_has_keypoint.index_select(0, keep_idx)  # (K,T)
+    mean_score_list: List[torch.Tensor] = []
+    for k in range(int(scores_kept.size(0))):
+        m = person_has_keypoint_kept[k]
+        if bool(m.any()):
+            mean_score_list.append(scores_kept[k][m].mean())
+        else:
+            mean_score_list.append(torch.zeros((), dtype=scores_kept.dtype))
+    mean_score = torch.stack(mean_score_list, dim=0)  # (K,)
+
+    valid_kept = unique_valid_len.index_select(0, keep_idx).to(mean_score.dtype)  # (K,)
+    composite = valid_kept * 1000.0 + mean_score  # unique_valid_len を主にする
+
     k_out = min(int(max_p_out), int(keep_idx.numel()))
     if k_out <= 0:
         return False

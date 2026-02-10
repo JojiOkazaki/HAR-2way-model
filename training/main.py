@@ -104,15 +104,20 @@ def _freeze_by_prefix(model: torch.nn.Module, cfg: dict) -> None:
 # model / loader
 # -----------------------------
 def create_model(params: dict) -> torch.nn.Module:
+    # imgの設定ブロックを取得
+    img_params = params["img"]
+    
+    # backbone設定を取得 (デフォルトは resnet18 とする)
+    backbone_type = img_params.get("backbone", "resnet18")
+    
     return FullModel(
         ImageBranch(
-            #CNN(**params["img"]["cnn"]),
-            TransformerEncoder(**params["img"]["transformer"]),
+            transformer=TransformerEncoder(**img_params["transformer"]),
+            backbone_type=backbone_type,      # 追加: バックボーンの種類
+            cnn_params=img_params.get("cnn")  # 追加: custom用パラメータ
         ),
         SkeletonBranch(
             STGCN(**params["skel"]["stgcn"]),
-            #config_path="training/configs/stgcn_coco.py",
-            #checkpoint_path=None
         ),
         MLP(**params["mlp"]),
     )

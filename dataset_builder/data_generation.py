@@ -192,9 +192,10 @@ def generate_video_sample(
     pid_list = [int(pid) for pid in person_ids]
     pid_set = set(pid_list)
 
-    # personごとの出現区間（valid record がある最初と最後）
+    # personごとの出現区間（valid record がある最初と最後）+ 実在フレーム列
     first_seen: Dict[int, Optional[int]] = {pid: None for pid in pid_set}
     last_seen: Dict[int, Optional[int]] = {pid: None for pid in pid_set}
+    seen_frames: Dict[int, List[int]] = {pid: [] for pid in pid_set}
 
     for f in range(common_frames):
         frame_obj = frames_list[f]
@@ -222,22 +223,21 @@ def generate_video_sample(
             if first_seen[pid_i] is None:
                 first_seen[pid_i] = f
             last_seen[pid_i] = f
+            seen_frames[pid_i].append(f)
 
     # personごとのフレーム列 (P,T)
     per_person_frames: List[List[int]] = []
     for pid in pid_list:
-        start = first_seen.get(pid, None)
-        end = last_seen.get(pid, None)
-
-        if start is None or end is None:
-            fids = sample_frame_ids([common_frames], int(T))
-            fids = [int(max(0, min(common_frames - 1, x))) for x in fids]
+        seen = seen_frames.get(int(pid), [])
+        if len(seen) > 0:
+            # 実際に person_id が存在したフレーム列からサンプルする
+            rel = sample_frame_ids([len(seen)], int(T))
+            fids = [int(seen[int(r)]) for r in rel]
             per_person_frames.append(fids)
             continue
 
-        seg_len = int(end) - int(start) + 1
-        rel = sample_frame_ids([seg_len], int(T))
-        fids = [int(start) + int(r) for r in rel]
+        # 1度も出てこないperson_id（基本は後段で落ちる）
+        fids = sample_frame_ids([common_frames], int(T))
         fids = [int(max(0, min(common_frames - 1, x))) for x in fids]
         per_person_frames.append(fids)
 

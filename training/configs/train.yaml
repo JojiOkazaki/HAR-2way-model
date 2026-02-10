@@ -24,10 +24,11 @@ weighted_sampler:
 model:
   architecture:
     img:
+      backbone: "custom" # custom/resnet18/resnet50
       cnn:
-        conv_channels: [3, 32, 64, 128, 128, 128]
+        conv_channels: [3, 16, 32, 62, 128, 256]
         fc_layers: [128]
-        dropouts: [0.0, 0.1, 0.2, 0.3, 0.4]
+        dropouts: [0.0, 0.1, 0.2, 0.4, 0.5]
         input_size: [112, 112]
       transformer:
         d_model: 128
@@ -35,26 +36,26 @@ model:
         num_layers: 2
         dim_ff: 256
         max_len: 32
-        dropout: 0.5
+        dropout: 0.8
 
     skel:
       stgcn:
-        channels: [3, 64, 64, 128, 128, 128, 128]
-        dropouts: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+        channels: [3, 64, 64, 96] # 8/16/32/48/64/80/96
+        dropouts: [0.0, 0.2, 0.3]
         temporal_kernel_size: 9
         norm: layer # batch / layer
 
     mlp:
-      layers: [256, 512, 768]
-      dropouts: [0.4]
+      layers: [224, 512, 768]
+      dropouts: [0.6]
 
   loss_weights: [1.0, 1.0, 1.0]
 
 training:
   batch_size: 4
-  epochs: 120
+  epochs: 30
   accum_steps: 1
-  max_norm: 5.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
+  max_norm: 1.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
   patience: 15
   min_delta: 0.005
@@ -73,7 +74,7 @@ training:
   unknown_label_ids: [999]
 
   # proto_ce でも温度は使う（logitsのスケーリング）
-  temperature: 0.07
+  temperature: 0.2
 
 optimizer:
   lr: 0.0001 # 1e-3になると学習できない 0.0005 -> 0.001 (2倍)

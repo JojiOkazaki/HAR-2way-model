@@ -17,7 +17,7 @@ W = 112
 J = 17
 
 # サンプリング前の足切り（min(video_frames, json_frames) がこれ未満なら除外）
-MIN_FRAMES = 30
+MIN_FRAMES = 32
 
 # 1動画あたり候補人物数（先に多めに拾って、後段で「主人物優先」で絞り込む）
 MAX_P_CANDIDATE = 10
