@@ -236,16 +236,17 @@ class DeviceAugmentLoader:
             if self.enabled:
                 if self.img_augment is not None:
                     # frames: (B, P, T, C, H, W)
-                    frames = self.img_augment(frames)
+                    # 1サンプル(frames[b] = (P,T,C,H,W))ごとにaugmentを呼ぶ
+                    with torch.no_grad():
+                        for b in range(int(frames.size(0))):
+                            frames[b] = self.img_augment(frames[b])
 
                 if self.skel_augment is not None:
-                    # keypoints: (B, P, T, J, 2) -> (B*P, T, J, 2) でaugment
-                    if keypoints.ndim != 5 or int(keypoints.size(-1)) != 2:
-                        raise ValueError(f"unexpected keypoints shape: {tuple(keypoints.shape)}")
-                    B, P, T, J, C = keypoints.shape
-                    keypoints_f = keypoints.reshape(B * P, T, J, C)
-                    keypoints_f = self.skel_augment(keypoints_f)
-                    keypoints = keypoints_f.reshape(B, P, T, J, C)
+                    # keypoints: (B, P, T, J, 2)
+                    # 1サンプル(keypoints[b] = (P,T,J,2))ごとにaugmentを呼ぶ
+                    with torch.no_grad():
+                        for b in range(int(keypoints.size(0))):
+                            keypoints[b] = self.skel_augment(keypoints[b])
 
             if label_ids is None:
                 yield frames, keypoints, scores, label
