@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from collections import Counter
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Iterator
 
 import torch
 import torch.nn.functional as F
@@ -20,8 +20,11 @@ from training.modules.utils import setup_runtime, load_yaml, format_hhmmss
 from training.modules.utils import build_coco17_adj
 from training.modules.utils import EarlyStopper
 
+# GPU版augment（training/modules/utils/augment.py）
+from training.modules.utils.augment import ImageOnlyAugment, SkeletonAugment
+
 # __init__.py を変更しないため明示import
-from training.modules.dataset.dataset import SyncedDataset, ImageOnlyAugment, SkeletonAugment, pad_person_collate
+from training.modules.dataset.dataset import SyncedDataset, pad_person_collate
 
 from config_base import *
 
@@ -106,10 +109,10 @@ def _freeze_by_prefix(model: torch.nn.Module, cfg: dict) -> None:
 def create_model(params: dict) -> torch.nn.Module:
     # imgの設定ブロックを取得
     img_params = params["img"]
-    
+
     # backbone設定を取得 (デフォルトは resnet18 とする)
     backbone_type = img_params.get("backbone", "resnet18")
-    
+
     return FullModel(
         ImageBranch(
             transformer=TransformerEncoder(**img_params["transformer"]),
@@ -160,18 +163,21 @@ def create_loader(
     batch_size: int,
     num_workers: int,
     is_train: bool = True,
-    img_aug=None,
-    skel_aug=None,
     sampler=None,
 ) -> DataLoader:
+    """
+    注意:
+      - Dataset側のaugmentは使わない（= CPU augmentを無効化する）
+      - augmentは main.py 側で device 上（GPU）で適用する
+    """
     persistent = bool(num_workers and int(num_workers) > 0)
     return DataLoader(
         SyncedDataset(
             image_dir,
             skeleton_dir,
             file_list=file_list,
-            img_augment=img_aug if is_train else None,
-            skel_augment=skel_aug if is_train else None,
+            img_augment=None,      # CPU augment 無効
+            skel_augment=None,     # CPU augment 無効
         ),
         batch_size=batch_size,
         shuffle=(is_train and sampler is None),
@@ -182,6 +188,69 @@ def create_loader(
         collate_fn=pad_person_collate,
         drop_last=False,
     )
+
+
+class DeviceAugmentLoader:
+    """
+    DataLoaderの出力バッチを main process で device に転送し、device上でaugmentを適用する。
+
+    Trainer側は従来通り .to(device) するが、既に同一device上なら実質no-opになる。
+    """
+
+    def __init__(
+        self,
+        loader: DataLoader,
+        device: torch.device,
+        img_augment=None,
+        skel_augment=None,
+        enabled: bool = True,
+    ):
+        self.loader = loader
+        self.device = device
+        self.img_augment = img_augment
+        self.skel_augment = skel_augment
+        self.enabled = bool(enabled)
+
+    def __len__(self) -> int:
+        return len(self.loader)
+
+    def __iter__(self) -> Iterator:
+        for batch in self.loader:
+            if len(batch) == 4:
+                frames, keypoints, scores, label = batch
+                label_ids = None
+            elif len(batch) == 5:
+                frames, keypoints, scores, label, label_ids = batch
+            else:
+                raise ValueError(f"unexpected batch tuple length: {len(batch)}")
+
+            # move to device (GPU)
+            frames = frames.to(self.device, non_blocking=True)
+            keypoints = keypoints.to(self.device, non_blocking=True)
+            scores = scores.to(self.device, non_blocking=True)
+            label = label.to(self.device, non_blocking=True)
+            if label_ids is not None:
+                label_ids = label_ids.to(self.device, non_blocking=True)
+
+            # apply augmentation on device (train only)
+            if self.enabled:
+                if self.img_augment is not None:
+                    # frames: (B, P, T, C, H, W)
+                    frames = self.img_augment(frames)
+
+                if self.skel_augment is not None:
+                    # keypoints: (B, P, T, J, 2) -> (B*P, T, J, 2) でaugment
+                    if keypoints.ndim != 5 or int(keypoints.size(-1)) != 2:
+                        raise ValueError(f"unexpected keypoints shape: {tuple(keypoints.shape)}")
+                    B, P, T, J, C = keypoints.shape
+                    keypoints_f = keypoints.reshape(B * P, T, J, C)
+                    keypoints_f = self.skel_augment(keypoints_f)
+                    keypoints = keypoints_f.reshape(B, P, T, J, C)
+
+            if label_ids is None:
+                yield frames, keypoints, scores, label
+            else:
+                yield frames, keypoints, scores, label, label_ids
 
 
 # -----------------------------
@@ -328,7 +397,7 @@ def train(config: dict) -> None:
     # runtime
     device = torch.device(config["runtime"]["device"])
 
-    # preprocess（必要なら有効化）
+    # preprocess (augment objects are created here, but applied on device via DeviceAugmentLoader)
     img_aug = None
     img_aug_cfg = (config.get("preprocess", {}) or {}).get("img_aug", None)
     if isinstance(img_aug_cfg, dict):
@@ -365,19 +434,28 @@ def train(config: dict) -> None:
         alpha = float(sampler_cfg.get("alpha", 1.0))
         sampler = build_weighted_sampler_from_file_list(train_file_list, alpha=alpha)
 
-    train_loader = create_loader(
+    train_loader_cpu = create_loader(
         img_pt_dir, skel_pt_dir, train_file_list,
         batch_size, num_workers,
         is_train=True,
         sampler=sampler,
-        img_aug=img_aug,
-        skel_aug=skel_aug
     )
     val_loader = create_loader(
         img_pt_dir, skel_pt_dir, val_file_list,
         batch_size, num_workers,
-        is_train=False
+        is_train=False,
+        sampler=None,
     )
+
+    # train loader: move + augment on device (GPU)
+    train_loader = DeviceAugmentLoader(
+        train_loader_cpu,
+        device=device,
+        img_augment=img_aug,
+        skel_augment=skel_aug,
+        enabled=True,
+    )
+
     print(f"elapsed time: {format_hhmmss(time.perf_counter() - start_time)}")
 
     # (A) class prototypes (CPU) for proto_ce mode
@@ -399,8 +477,6 @@ def train(config: dict) -> None:
             num_workers=num_workers,
             is_train=False,
             sampler=None,
-            img_aug=None,
-            skel_aug=None,
         )
 
         class_protos_cpu, label_id_list, lid_to_cidx = build_class_prototypes_from_pt_labels(
@@ -417,6 +493,7 @@ def train(config: dict) -> None:
             log_dir / f"{timestamp}_class_prototypes.pt"
         )
         with (log_dir / f"{timestamp}_label_map.yaml").open("w", encoding="utf-8") as f:
+            import yaml
             yaml.safe_dump(
                 {
                     "class_count": int(class_protos_cpu.size(0)),
@@ -477,7 +554,7 @@ def train(config: dict) -> None:
         recall_k=recall_k,
     )
 
-    # proto_ce 用パラメータ（Trainer側で対応している前提）
+    # proto_ce 用パラメータ
     if loss_mode == "proto_ce":
         trainer_kwargs.update(
             dict(
@@ -489,7 +566,13 @@ def train(config: dict) -> None:
             )
         )
     else:
-        trainer_kwargs.update(dict(loss_mode="inbatch_infonce", min_valid_t=min_valid_t, unknown_label_ids=unknown_label_ids))
+        trainer_kwargs.update(
+            dict(
+                loss_mode="inbatch_infonce",
+                min_valid_t=min_valid_t,
+                unknown_label_ids=unknown_label_ids,
+            )
+        )
 
     trainer = Trainer(**trainer_kwargs)
 
@@ -590,7 +673,6 @@ def train(config: dict) -> None:
 
 if __name__ == "__main__":
     import argparse
-    import yaml
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="training/configs/train.yaml")

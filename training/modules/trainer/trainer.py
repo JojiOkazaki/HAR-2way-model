@@ -1,7 +1,7 @@
 # training/modules/trainer/trainer.py
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch.amp import autocast
@@ -22,6 +22,11 @@ class Trainer:
       - lid_to_cidx  dict[int,int] label_id -> class_index（proto_ce のみ）
       - min_valid_t
       - unknown_label_ids（例: [999]）
+
+    augmentation:
+      - img_augment: 画像入力(frames)に対するaugment callable（GPU上で適用する想定）
+      - skel_augment: 骨格入力(keypoints)に対するaugment callable（GPU上で適用する想定）
+        skel_augment は (P,T,J,2) を受ける実装を想定する（バッチ次元BはTrainer側でループ適用）
     """
 
     def __init__(
@@ -37,6 +42,8 @@ class Trainer:
         lid_to_cidx: Optional[dict] = None,
         min_valid_t: int = 16,
         unknown_label_ids: Optional[List[int]] = None,
+        img_augment: Optional[Callable] = None,
+        skel_augment: Optional[Callable] = None,
     ):
         self.model = model
         self.head_keys = list(head_keys)
@@ -49,6 +56,7 @@ class Trainer:
 
         self.set_device(device)
         self.set_loss_weights(loss_weights)
+        self.set_augmenters(img_augment=img_augment, skel_augment=skel_augment)
 
         # proto_ce 用
         self.class_protos = None
@@ -101,6 +109,10 @@ class Trainer:
         self._check_loss_weights(loss_weights)
         self.loss_weights = {k: float(v) for k, v in loss_weights.items()}
 
+    def set_augmenters(self, img_augment: Optional[Callable] = None, skel_augment: Optional[Callable] = None):
+        self.img_augment = img_augment
+        self.skel_augment = skel_augment
+
     def set_class_protos(self, class_protos_cpu: torch.Tensor, lid_to_cidx: dict):
         """
         class_protos_cpu: (C,D) CPU tensor
@@ -127,6 +139,39 @@ class Trainer:
             self._lid_table = table.to(self.device)
         else:
             self._lid_table = None
+
+    # -----------------------------
+    # augmentation (on device)
+    # -----------------------------
+    def _apply_augment_on_device(
+        self,
+        frames: torch.Tensor,     # (B,P,T,C,H,W) float
+        keypoints: torch.Tensor,  # (B,P,T,J,2) float
+        is_train: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Dataset側(__getitem__)でaugmentしない構成を前提に、
+        Trainer側で device 上（GPU）に転送した後で augment を適用する。
+
+        注意:
+          - img_augment / skel_augment は「1サンプル（1動画）」単位のcallを想定するため、
+            バッチ次元Bでループして適用する（CPU版datasetの挙動に合わせる）。
+          - padded persons も含まれるが、scores で valid 判定して落とすため問題ない。
+        """
+        if (not is_train) or (self.img_augment is None and self.skel_augment is None):
+            return frames, keypoints
+
+        with torch.no_grad():
+            B = int(frames.size(0))
+            if self.img_augment is not None:
+                for i in range(B):
+                    frames[i] = self.img_augment(frames[i])
+
+            if self.skel_augment is not None:
+                for i in range(B):
+                    keypoints[i] = self.skel_augment(keypoints[i])
+
+        return frames, keypoints
 
     # -----------------------------
     # forward
@@ -357,6 +402,9 @@ class Trainer:
             label = label.to(self.device, non_blocking=True)
             if label_ids is not None:
                 label_ids = label_ids.to(self.device, non_blocking=True)
+
+            # GPU augmentation (train only)
+            frames, keypoints = self._apply_augment_on_device(frames, keypoints, is_train=is_train)
 
             # valid person selection (B,P,T,J)
             person_has_keypoint = scores.max(dim=-1).values > 0  # (B,P,T)
