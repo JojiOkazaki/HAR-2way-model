@@ -26,13 +26,13 @@ model:
     img:
       backbone: "custom" # custom/resnet18/resnet50
       cnn:
-        conv_channels: [3, 16, 32, 62, 128, 256]
-        fc_layers: [128]
-        dropouts: [0.0, 0.1, 0.2, 0.4, 0.5]
+        conv_channels: [3, 16, 32, 64]
+        fc_layers: [80, 96]
+        dropouts: [0.0, 0.1, 0.2, 0.3]
         input_size: [112, 112]
       transformer:
-        d_model: 128
-        nhead: 8
+        d_model: 96
+        nhead: 4
         num_layers: 2
         dim_ff: 256
         max_len: 32
@@ -40,21 +40,21 @@ model:
 
     skel:
       stgcn:
-        channels: [3, 64, 64, 96] # 8/16/32/48/64/80/96
-        dropouts: [0.0, 0.2, 0.3]
+        channels: [3, 16, 32, 96] # 8/16/32/48/64/80/96
+        dropouts: [0.1, 0.3, 0.5]
         temporal_kernel_size: 9
         norm: layer # batch / layer
 
     mlp:
-      layers: [224, 512, 768]
-      dropouts: [0.6]
+      layers: [192, 768]
+      dropouts: []
 
   loss_weights: [0.0, 0.0, 1.0]
 
 training:
   batch_size: 4
   epochs: 120
-  accum_steps: 16
+  accum_steps: 1
   max_norm: 1.0 # 勾配が大きすぎないようにする。小さいと学習が遅くなり安定する。
   seed: 42
   patience: 15

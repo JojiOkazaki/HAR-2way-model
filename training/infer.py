@@ -30,6 +30,9 @@ try:
 except ImportError:
     pass
 
+plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.size'] = 11
 
 # -----------------------------
 # helpers
@@ -192,7 +195,9 @@ def save_confusion_png(
     plt.ylabel("True")
     plt.colorbar()
     plt.tight_layout()
-    plt.savefig(out_path, dpi=200)
+    
+    # --- 【修正】bbox_inches='tight' を追加 ---
+    plt.savefig(out_path, dpi=200, bbox_inches='tight')
     plt.close()
 
 
@@ -571,7 +576,7 @@ def main():
         for k in recall_ks:
             k_dir = out_dir / f"top{k}"
             ensure_dir(k_dir)
-            png_path = k_dir / f"confusion_{t}.png"
+            png_path = k_dir / f"confusion_{t}.pdf"
             save_confusion_png(png_path, st.confusion_by_k[k], normalize="true")
 
         # per-label recall

@@ -3,6 +3,10 @@ import csv
 import yaml
 import matplotlib.pyplot as plt
 
+plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.size'] = 11
+
 class Logger():
     def __init__(self, dir):
         self.dir = dir
@@ -43,7 +47,9 @@ class Logger():
         plt.grid(True)
 
         self.graph_path = self.dir / filename
-        plt.savefig(self.graph_path)
+        
+        # --- 【修正】bbox_inches='tight' を追加して余白を削除 ---
+        plt.savefig(self.graph_path, bbox_inches='tight')
         plt.close()
 
     def create_config(self, config, filename="config.yaml"):

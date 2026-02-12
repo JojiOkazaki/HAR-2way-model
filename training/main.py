@@ -271,6 +271,7 @@ def build_class_prototypes_from_pt_labels(
     loader: DataLoader,
     min_valid_t: int,
     unknown_label_ids: List[int],
+    use_first_hit: bool = False,  # 追加: Trueなら各クラス最初の1件だけ採用する
 ) -> Tuple[torch.Tensor, List[int], Dict[int, int]]:
     """
     `.pt` の labels / label_ids から
@@ -323,6 +324,14 @@ def build_class_prototypes_from_pt_labels(
 
         for lid, emb in zip(label_ids_f.tolist(), labels_f):
             lid = int(lid)
+            
+            # --- 修正箇所 start ---
+            # UCF101のようにラベルに対して文章が一意に決まる場合、
+            # 既に取得済みのラベルであれば更新（加算）せずにスキップする
+            if use_first_hit and (lid in sums):
+                continue
+            # --- 修正箇所 end ---
+
             if lid not in sums:
                 sums[lid] = emb.double().clone()
                 counts[lid] = 1
@@ -334,11 +343,11 @@ def build_class_prototypes_from_pt_labels(
         raise RuntimeError("class prototypes を作れませんでした（label_ids >= 0 のデータが無い/全て無効人物の可能性）。")
 
     label_id_list = sorted(sums.keys())
+    # use_first_hit=True の場合 counts[lid] は常に1になるため、割り算は実質無効化される（正しい挙動）
     protos = torch.stack([(sums[lid] / float(counts[lid])).float() for lid in label_id_list], dim=0)  # (C,D)
     protos = F.normalize(protos, dim=-1, eps=1e-6)  # cosine用
     lid_to_cidx = {int(lid): i for i, lid in enumerate(label_id_list)}
     return protos.cpu(), label_id_list, lid_to_cidx
-
 
 # -----------------------------
 # train
@@ -480,10 +489,15 @@ def train(config: dict) -> None:
             sampler=None,
         )
 
+        # dataset.name が ucf101 の場合は use_first_hit=True に設定する
+        ds_name = config.get("dataset", {}).get("name", "")
+        use_first_hit = (str(ds_name).lower() == "ucf101")
+
         class_protos_cpu, label_id_list, lid_to_cidx = build_class_prototypes_from_pt_labels(
             proto_loader,
             min_valid_t=min_valid_t,
             unknown_label_ids=unknown_label_ids,
+            use_first_hit=use_first_hit  # 引数を追加
         )
 
         # 保存（推論やデバッグ用）
@@ -666,7 +680,7 @@ def train(config: dict) -> None:
                     y_axis_headers=[f"t_{name}_{k}", f"v_{name}_{k}"],
                     title=f"{name} ({k})",
                     figsize=graph_size,
-                    filename=graph_dir / f"{name}_{k}.png"
+                    filename=graph_dir / f"{name}_{k}.pdf"
                 )
 
         print(f"elapsed time: {format_hhmmss(time.perf_counter() - start_time)}")
