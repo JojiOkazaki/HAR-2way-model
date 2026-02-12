@@ -36,13 +36,24 @@ class Logger():
         x = [float(row[x_axis_header]) for row in rows]
 
         plt.figure(figsize=figsize)
-
-        for y_header in y_axis_headers:
+        
+        # --- 【修正】色のリストを定義 (例: 1本目は濃いグレー、2本目は薄いグレー) ---
+        colors = ['#4D4D4D', '#999999'] 
+        # 必要に応じて線種も変えると白黒印刷で区別しやすくなります
+        linestyles = ['-', '--']
+        
+        for i, y_header in enumerate(y_axis_headers):
             y = [float(row[y_header]) for row in rows]
-            plt.plot(x, y, label=y_header)
+            
+            # --- 【修正】色と線種を指定してプロット ---
+            # 色のリストの長さ以上にデータがある場合はモジュロ演算で循環させます
+            c = colors[i % len(colors)]
+            ls = linestyles[i % len(linestyles)]
+            
+            plt.plot(x, y, label=y_header, color=c, linestyle=ls)
 
-        plt.xlabel(x_axis_header)
-        plt.title(title)
+        #plt.xlabel(x_axis_header)
+        #plt.title(title)
         plt.legend()
         plt.grid(True)
 
