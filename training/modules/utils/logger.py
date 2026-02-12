@@ -38,10 +38,10 @@ class Logger():
         plt.figure(figsize=figsize)
         
         # --- 【修正】色のリストを定義 (例: 1本目は濃いグレー、2本目は薄いグレー) ---
-        colors = ['#4D4D4D', '#999999'] 
+        colors = ['#4D4D4D', '#56B4E9'] 
         # 必要に応じて線種も変えると白黒印刷で区別しやすくなります
         linestyles = ['-', '--']
-        
+
         for i, y_header in enumerate(y_axis_headers):
             y = [float(row[y_header]) for row in rows]
             
